@@ -1,0 +1,17 @@
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <initguid.h>
+
+namespace MLFilter {
+
+// {6A8847CA-F976-4FAB-9EAD-BD3B423184DE}
+DEFINE_GUID(CLSID_MLFilter,
+    0x6a8847ca, 0xf976, 0x4fab, 0x9e, 0xad, 0xbd, 0x3b, 0x42, 0x31, 0x84, 0xde);
+
+// {B78A67F4-B70A-4F8C-AB6F-EB3CEB24180D}
+DEFINE_GUID(CLSID_MLFilterPropSettings,
+    0xb78a67f4, 0xb70a, 0x4f8c, 0xab, 0x6f, 0xeb, 0x3c, 0xeb, 0x24, 0x18, 0xd);
+
+}

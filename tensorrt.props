@@ -1,0 +1,38 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!--
+    TensorRT + CUDA configuration for the engine-building backend.
+
+    Driven by two environment variables (see README "Development setup"):
+      TENSORRT_ROOT  e.g. C:\TensorRT        (extracted TensorRT zip: include\, lib\, bin\)
+      CUDA_PATH      set by the CUDA Toolkit installer (e.g. ...\CUDA\v13.3)
+
+    The exact TensorRT import-lib suffix tracks the major version (TensorRT 11.x -> _11).
+    Update TensorRtLibSuffix if you install a different major version.
+  -->
+  <PropertyGroup Label="UserMacros">
+    <TensorRtLibSuffix>_11</TensorRtLibSuffix>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(TENSORRT_ROOT)\include;$(CUDA_PATH)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <AdditionalLibraryDirectories>$(TENSORRT_ROOT)\lib;$(CUDA_PATH)\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>nvinfer$(TensorRtLibSuffix).lib;nvonnxparser$(TensorRtLibSuffix).lib;cudart.lib;nvml.lib;delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- Delay-load the TensorRT DLLs so the .ax loads without them resolved up front;
+           DllMain then prepends the bundled "bin" folder to PATH so they (and the CUDA
+           DLLs TensorRT loads dynamically) are found in a redistributable release. -->
+      <DelayLoadDLLs>nvinfer$(TensorRtLibSuffix).dll;nvonnxparser$(TensorRtLibSuffix).dll;%(DelayLoadDLLs)</DelayLoadDLLs>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <Target Name="CheckTensorRtEnvironment" BeforeTargets="ClCompile">
+    <Error Condition="'$(TENSORRT_ROOT)' == ''"
+           Text="TENSORRT_ROOT environment variable is not set. See README 'Development setup'. Set it to your extracted TensorRT folder (e.g. C:\TensorRT) and restart Visual Studio." />
+    <Error Condition="'$(CUDA_PATH)' == ''"
+           Text="CUDA_PATH environment variable is not set. Install the CUDA Toolkit (it sets CUDA_PATH) and restart Visual Studio." />
+    <Error Condition="!Exists('$(TENSORRT_ROOT)\include\NvInfer.h')"
+           Text="NvInfer.h not found under $(TENSORRT_ROOT)\include. Check that TENSORRT_ROOT points at the extracted TensorRT folder." />
+  </Target>
+</Project>

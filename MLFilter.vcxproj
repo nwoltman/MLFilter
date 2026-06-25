@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{CF9EA8B7-0EAB-4964-B547-2071FCE5C721}</ProjectGuid>
+    <RootNamespace>MLFilter</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+  </PropertyGroup>
+  <Import Project="$(SolutionDir)common.props" />
+  <Import Project="$(SolutionDir)tensorrt.props" />
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup>
+    <TargetExt>.ax</TargetExt>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(SolutionDir)deps\baseclasses\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <ModuleDefinitionFile>src\mlfilter.def</ModuleDefinitionFile>
+      <AdditionalDependencies>strmiids.lib;winmm.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClInclude Include="src\constants.h" />
+    <ClInclude Include="src\filter.h" />
+    <ClInclude Include="src\formats.h" />
+    <ClInclude Include="src\guids.h" />
+    <ClInclude Include="src\progress_window.h" />
+    <ClInclude Include="src\prop_settings.h" />
+    <ClInclude Include="src\registry.h" />
+    <ClInclude Include="src\resource.h" />
+    <ClInclude Include="src\settings.h" />
+    <ClInclude Include="src\engine\engine_builder.h" />
+    <ClInclude Include="src\engine\engine_naming.h" />
+    <ClInclude Include="src\engine\gpu_info.h" />
+    <ClInclude Include="src\engine\onnx_fp16.h" />
+    <ClInclude Include="src\engine\tensorrt_engine_builder.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\filter.cpp" />
+    <ClCompile Include="src\formats.cpp" />
+    <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\progress_window.cpp" />
+    <ClCompile Include="src\prop_settings.cpp" />
+    <ClCompile Include="src\registry.cpp" />
+    <ClCompile Include="src\settings.cpp" />
+    <ClCompile Include="src\engine\engine_naming.cpp" />
+    <ClCompile Include="src\engine\gpu_info.cpp" />
+    <ClCompile Include="src\engine\onnx_fp16.cpp" />
+    <ClCompile Include="src\engine\tensorrt_engine_builder.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="src\mlfilter.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="src\mlfilter.def" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="deps\baseclasses\baseclasses.vcxproj">
+      <Project>{6D6FABA3-51A7-4162-B5A8-ADA838387D60}</Project>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

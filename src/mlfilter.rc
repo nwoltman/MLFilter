@@ -1,0 +1,30 @@
+// SPDX-License-Identifier: Apache-2.0
+
+#include <windows.h>
+
+#include "resource.h"
+
+IDD_SETTINGS_PAGE DIALOGEX 0, 0, 340, 262
+STYLE DS_SETFONT | DS_FIXEDSYS | DS_CENTER | WS_CHILD
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "ONNX model:", IDC_STATIC, 7, 9, 60, 8
+    EDITTEXT        IDC_EDIT_MODEL, 7, 20, 256, 14, ES_AUTOHSCROLL
+    PUSHBUTTON      "Browse...", IDC_BUTTON_BROWSE, 270, 19, 63, 15
+
+    LTEXT           "Engines are built automatically from each video's resolution the first time it is played. A 1920x1080 engine is pre-built when a model file is selected.", IDC_STATIC, 7, 42, 326, 26
+    PUSHBUTTON      "Build 1080p engine", IDC_BUTTON_BUILD, 7, 70, 90, 14
+    PUSHBUTTON      "Delete all engine files", IDC_BUTTON_DELETE_ENGINES, 103, 70, 110, 14
+
+    LTEXT           "Build log:", IDC_STATIC, 7, 90, 60, 8
+    EDITTEXT        IDC_EDIT_LOG, 7, 101, 326, 62, ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL | WS_BORDER | NOT WS_TABSTOP
+
+    LTEXT           "File Match Globs:", IDC_STATIC, 7, 173, 80, 8
+    EDITTEXT        IDC_EDIT_GLOBS, 7, 184, 326, 42, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_BORDER
+    LTEXT           "Only process files whose path matches these patterns (one per line, e.g. *.mkv). Leave blank to process all files; non-matching files bypass the filter.", IDC_STATIC, 7, 229, 326, 26
+END
+
+STRINGTABLE
+BEGIN
+    IDS_SETTINGS    "Settings"
+END
