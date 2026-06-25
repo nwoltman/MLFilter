@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClInclude Include="src\amextra.h" />
+    <ClInclude Include="src\amfilter.h" />
+    <ClInclude Include="src\cache.h" />
+    <ClInclude Include="src\checkbmi.h" />
+    <ClInclude Include="src\combase.h" />
+    <ClInclude Include="src\cprop.h" />
+    <ClInclude Include="src\ctlutil.h" />
+    <ClInclude Include="src\ddmm.h" />
+    <ClInclude Include="src\dllsetup.h" />
+    <ClInclude Include="src\dxmperf.h" />
+    <ClInclude Include="src\fourcc.h" />
+    <ClInclude Include="src\measure.h" />
+    <ClInclude Include="src\msgthrd.h" />
+    <ClInclude Include="src\mtype.h" />
+    <ClInclude Include="src\outputq.h" />
+    <ClInclude Include="src\perflog.h" />
+    <ClInclude Include="src\perfstruct.h" />
+    <ClInclude Include="src\pstream.h" />
+    <ClInclude Include="src\pullpin.h" />
+    <ClInclude Include="src\refclock.h" />
+    <ClInclude Include="src\reftime.h" />
+    <ClInclude Include="src\renbase.h" />
+    <ClInclude Include="src\schedule.h" />
+    <ClInclude Include="src\seekpt.h" />
+    <ClInclude Include="src\source.h" />
+    <ClInclude Include="src\streams.h" />
+    <ClInclude Include="src\strmctl.h" />
+    <ClInclude Include="src\sysclock.h" />
+    <ClInclude Include="src\transfrm.h" />
+    <ClInclude Include="src\transip.h" />
+    <ClInclude Include="src\videoctl.h" />
+    <ClInclude Include="src\vtrans.h" />
+    <ClInclude Include="src\winctrl.h" />
+    <ClInclude Include="src\winutil.h" />
+    <ClInclude Include="src\wxdebug.h" />
+    <ClInclude Include="src\wxlist.h" />
+    <ClInclude Include="src\wxutil.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\amextra.cpp" />
+    <ClCompile Include="src\amfilter.cpp" />
+    <ClCompile Include="src\amvideo.cpp" />
+    <ClCompile Include="src\arithutil.cpp" />
+    <ClCompile Include="src\combase.cpp" />
+    <ClCompile Include="src\cprop.cpp" />
+    <ClCompile Include="src\ctlutil.cpp" />
+    <ClCompile Include="src\ddmm.cpp" />
+    <ClCompile Include="src\dllentry.cpp" />
+    <ClCompile Include="src\dllsetup.cpp" />
+    <ClCompile Include="src\mtype.cpp" />
+    <ClCompile Include="src\outputq.cpp" />
+    <ClCompile Include="src\perflog.cpp" />
+    <ClCompile Include="src\pstream.cpp" />
+    <ClCompile Include="src\pullpin.cpp" />
+    <ClCompile Include="src\refclock.cpp" />
+    <ClCompile Include="src\renbase.cpp" />
+    <ClCompile Include="src\schedule.cpp" />
+    <ClCompile Include="src\seekpt.cpp" />
+    <ClCompile Include="src\source.cpp" />
+    <ClCompile Include="src\strmctl.cpp" />
+    <ClCompile Include="src\sysclock.cpp" />
+    <ClCompile Include="src\transfrm.cpp" />
+    <ClCompile Include="src\transip.cpp" />
+    <ClCompile Include="src\videoctl.cpp" />
+    <ClCompile Include="src\vtrans.cpp" />
+    <ClCompile Include="src\winctrl.cpp" />
+    <ClCompile Include="src\winutil.cpp" />
+    <ClCompile Include="src\wxdebug.cpp" />
+    <ClCompile Include="src\wxlist.cpp" />
+    <ClCompile Include="src\wxutil.cpp" />
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{6D6FABA3-51A7-4162-B5A8-ADA838387D60}</ProjectGuid>
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+  </PropertyGroup>
+  <Import Project="$(SolutionDir)common.props" />
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>
