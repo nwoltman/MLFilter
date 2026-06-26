@@ -5,11 +5,11 @@
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
-#include <format>
 #include <thread>
 #include <vector>
 
 #include <dvdmedia.h>
+#include <dxva.h>
 #include <shlwapi.h>
 
 #include "constants.h"
@@ -45,8 +45,6 @@ auto NormalizeSeparators(std::wstring text) -> std::wstring {
     return text;
 }
 
-// Returns true if the file should be processed: no patterns configured (no
-// restriction), unknown file path, or the path matches at least one pattern.
 auto FileMatchesGlobs(const std::wstring &path, const std::wstring &globsText) -> bool {
     std::vector<std::wstring> patterns;
     size_t start = 0;
@@ -79,8 +77,7 @@ auto FileMatchesGlobs(const std::wstring &path, const std::wstring &globsText) -
     return false;
 }
 
-// Extracts the pixel width/height from a video media type (VIDEOINFOHEADER or
-// VIDEOINFOHEADER2). Returns false if the type isn't a recognized video format.
+// Extracts the pixel width/height from a video media type (VIDEOINFOHEADER or VIDEOINFOHEADER2).
 auto GetVideoResolution(const CMediaType &mt, int &width, int &height) -> bool {
     if (mt.formattype == FORMAT_VideoInfo && mt.cbFormat >= sizeof(VIDEOINFOHEADER)) {
         const auto *vih = reinterpret_cast<const VIDEOINFOHEADER *>(mt.pbFormat);
@@ -97,11 +94,73 @@ auto GetVideoResolution(const CMediaType &mt, int &width, int &height) -> bool {
     return false;
 }
 
+// Maps a supported input subtype to the converter's format kind. Returns false for subtypes
+// the converter can't unpack (the filter then falls back to pass-through).
+auto KindForSubtype(const GUID &s, YuvToRgbConverter::Kind &kind) -> bool {
+    using K = YuvToRgbConverter::Kind;
+    if (s == FOURCCMap(Fourcc('N', 'V', '1', '2'))) { kind = K::NV12; }
+    else if (s == FOURCCMap(Fourcc('Y', 'V', '1', '2'))) { kind = K::YV12; }
+    else if (s == FOURCCMap(Fourcc('P', '0', '1', '0'))) { kind = K::P010; }
+    else if (s == FOURCCMap(Fourcc('P', '0', '1', '6'))) { kind = K::P016; }
+    else if (s == FOURCCMap(Fourcc('Y', 'U', 'Y', '2'))) { kind = K::YUY2; }
+    else if (s == FOURCCMap(Fourcc('U', 'Y', 'V', 'Y'))) { kind = K::UYVY; }
+    else if (s == FOURCCMap(Fourcc('P', '2', '1', '0'))) { kind = K::P210; }
+    else if (s == FOURCCMap(Fourcc('P', '2', '1', '6'))) { kind = K::P216; }
+    else if (s == FOURCCMap(Fourcc('v', '2', '1', '0'))) { kind = K::V210; }
+    else if (s == FOURCCMap(Fourcc('Y', 'V', '2', '4'))) { kind = K::YV24; }
+    else if (s == FOURCCMap(Fourcc('A', 'Y', 'U', 'V'))) { kind = K::AYUV; }
+    else if (s == FOURCCMap(Fourcc('Y', '4', '1', '0'))) { kind = K::Y410; }
+    else if (s == FOURCCMap(Fourcc('v', '4', '1', '0'))) { kind = K::V410; }
+    else if (s == FOURCCMap(Fourcc('Y', '4', '1', '6'))) { kind = K::Y416; }
+    else if (s == MEDIASUBTYPE_RGB24) { kind = K::RGB24; }
+    else if (s == MEDIASUBTYPE_RGB32) { kind = K::RGB32; }
+    else if (s == FOURCCMap(Fourcc('R', 'G', 'B', '0'))) { kind = K::RGB48; }
+    else { return false; }
+    return true;
+}
+
+auto IsRgbKind(YuvToRgbConverter::Kind kind) -> bool {
+    using K = YuvToRgbConverter::Kind;
+    return kind == K::RGB24 || kind == K::RGB32 || kind == K::RGB48;
+}
+
+// Resolves the conversion's matrix and range from the input media type's color info, mirroring
+// the reference python: range defaults to limited (full for RGB); an unspecified matrix
+// defaults by height (BT.601 below 720p, otherwise BT.709).
+auto ResolveColorInfo(const CMediaType &mt, int height, bool isRgb, bool &bt709, bool &fullRange) -> void {
+    fullRange = isRgb; // RGB is full-range by default; YUV limited
+    bool matrixKnown = false;
+
+    if (mt.formattype == FORMAT_VideoInfo2 && mt.cbFormat >= sizeof(VIDEOINFOHEADER2)) {
+        const auto *vih2 = reinterpret_cast<const VIDEOINFOHEADER2 *>(mt.pbFormat);
+        if ((vih2->dwControlFlags & AMCONTROL_USED) && (vih2->dwControlFlags & AMCONTROL_COLORINFO_PRESENT)) {
+            const auto ext = reinterpret_cast<const DXVA_ExtendedFormat *>(&vih2->dwControlFlags);
+            if (ext->NominalRange == DXVA_NominalRange_0_255) {
+                fullRange = true;
+            } else if (ext->NominalRange == DXVA_NominalRange_16_235) {
+                fullRange = false;
+            }
+            if (ext->VideoTransferMatrix == DXVA_VideoTransferMatrix_BT709) {
+                bt709 = true;
+                matrixKnown = true;
+            } else if (ext->VideoTransferMatrix == DXVA_VideoTransferMatrix_BT601 ||
+                       ext->VideoTransferMatrix == DXVA_VideoTransferMatrix_SMPTE240M) {
+                bt709 = false;
+                matrixKnown = true;
+            }
+        }
+    }
+
+    if (!matrixKnown) {
+        bt709 = height >= 720;
+    }
+}
+
 }
 
 
-CMLFilter::CMLFilter(LPUNKNOWN pUnk, HRESULT *phr)
-    : CTransInPlaceFilter(FILTER_NAME_WIDE, pUnk, CLSID_MLFilter, phr, false) {}
+CMLFilter::CMLFilter(LPUNKNOWN pUnk, HRESULT * /*phr*/)
+    : CTransformFilter(FILTER_NAME_WIDE, pUnk, CLSID_MLFilter) {}
 
 auto CALLBACK CMLFilter::CreateInstance(LPUNKNOWN pUnk, HRESULT *phr) -> CUnknown * {
     auto *instance = new CMLFilter(pUnk, phr);
@@ -118,19 +177,19 @@ auto STDMETHODCALLTYPE CMLFilter::NonDelegatingQueryInterface(REFIID riid, void 
         return GetInterface(static_cast<ISpecifyPropertyPages *>(this), ppv);
     }
 
-    return CTransInPlaceFilter::NonDelegatingQueryInterface(riid, ppv);
+    return CTransformFilter::NonDelegatingQueryInterface(riid, ppv);
 }
 
 auto CMLFilter::CheckInputType(const CMediaType *mtIn) -> HRESULT {
     CheckPointer(mtIn, E_POINTER);
 
-    if (*mtIn->Type() != MEDIATYPE_Video || !IsSupportedSubtype(*mtIn->Subtype())) {
+    if (*mtIn->Type() != MEDIATYPE_Video || !IsSupportedInputSubtype(*mtIn->Subtype())) {
         // Reject compressed/unknown types so we connect after the decoder, not before it.
         return VFW_E_TYPE_NOT_ACCEPTED;
     }
 
-    // If the playing file doesn't match the configured globs, refuse the connection so
-    // the graph routes around us, and remove this filter from the graph.
+    // If the playing file doesn't match the configured globs, refuse the connection so the
+    // graph routes around us, and remove this filter from the graph.
     if (!ShouldProcessCurrentFile()) {
         ScheduleSelfRemoval();
         return VFW_E_TYPE_NOT_ACCEPTED;
@@ -139,19 +198,226 @@ auto CMLFilter::CheckInputType(const CMediaType *mtIn) -> HRESULT {
     return S_OK;
 }
 
+auto CMLFilter::CheckTransform(const CMediaType *mtIn, const CMediaType *mtOut) -> HRESULT {
+    CheckPointer(mtIn, E_POINTER);
+    CheckPointer(mtOut, E_POINTER);
+
+    if (*mtIn->Type() != MEDIATYPE_Video || !IsSupportedInputSubtype(*mtIn->Subtype())) {
+        return VFW_E_TYPE_NOT_ACCEPTED;
+    }
+
+    if (_processor == nullptr) {
+        // Pass-through: the output must match the input.
+        return *mtOut->Subtype() == *mtIn->Subtype() ? S_OK : VFW_E_TYPE_NOT_ACCEPTED;
+    }
+
+    // Inference: output must be RGB48 at the engine's output resolution.
+    if (*mtOut->Subtype() != OutputSubtype()) {
+        return VFW_E_TYPE_NOT_ACCEPTED;
+    }
+    int outW = 0;
+    int outH = 0;
+    if (!GetVideoResolution(*mtOut, outW, outH) || outW != _processor->OutputWidth() || outH != _processor->OutputHeight()) {
+        return VFW_E_TYPE_NOT_ACCEPTED;
+    }
+    return S_OK;
+}
+
+auto CMLFilter::GetMediaType(int iPosition, CMediaType *pMediaType) -> HRESULT {
+    CheckPointer(pMediaType, E_POINTER);
+
+    if (m_pInput == nullptr || !m_pInput->IsConnected()) {
+        return E_UNEXPECTED;
+    }
+    if (iPosition < 0) {
+        return E_INVALIDARG;
+    }
+    if (iPosition > 0) {
+        return VFW_S_NO_MORE_ITEMS;
+    }
+
+    const CMediaType &inMt = m_pInput->CurrentMediaType();
+
+    if (_processor == nullptr) {
+        // Pass-through: offer the input type unchanged.
+        *pMediaType = inMt;
+        return S_OK;
+    }
+
+    const int outW = _processor->OutputWidth();
+    const int outH = _processor->OutputHeight();
+    const DWORD imageSize = static_cast<DWORD>(Rgb48Stride(outW)) * outH;
+
+    // Inherit timing / aspect ratio / color metadata from the input where available.
+    REFERENCE_TIME avgTimePerFrame = 0;
+    DWORD aspectX = 0;
+    DWORD aspectY = 0;
+    DWORD inControlFlags = 0;
+    if (inMt.formattype == FORMAT_VideoInfo2 && inMt.cbFormat >= sizeof(VIDEOINFOHEADER2)) {
+        const auto *in = reinterpret_cast<const VIDEOINFOHEADER2 *>(inMt.pbFormat);
+        avgTimePerFrame = in->AvgTimePerFrame;
+        aspectX = in->dwPictAspectRatioX;
+        aspectY = in->dwPictAspectRatioY;
+        inControlFlags = in->dwControlFlags;
+    } else if (inMt.formattype == FORMAT_VideoInfo && inMt.cbFormat >= sizeof(VIDEOINFOHEADER)) {
+        avgTimePerFrame = reinterpret_cast<const VIDEOINFOHEADER *>(inMt.pbFormat)->AvgTimePerFrame;
+    }
+
+    pMediaType->InitMediaType();
+    pMediaType->SetType(&MEDIATYPE_Video);
+    pMediaType->SetSubtype(&OutputSubtype());
+    pMediaType->SetFormatType(&FORMAT_VideoInfo2);
+    pMediaType->SetTemporalCompression(FALSE);
+    pMediaType->SetSampleSize(imageSize);
+
+    auto *out = reinterpret_cast<VIDEOINFOHEADER2 *>(pMediaType->AllocFormatBuffer(sizeof(VIDEOINFOHEADER2)));
+    if (out == nullptr) {
+        return E_OUTOFMEMORY;
+    }
+    ZeroMemory(out, sizeof(*out));
+    out->AvgTimePerFrame = avgTimePerFrame;
+    out->dwPictAspectRatioX = aspectX != 0 ? aspectX : static_cast<DWORD>(outW);
+    out->dwPictAspectRatioY = aspectY != 0 ? aspectY : static_cast<DWORD>(outH);
+
+    // Tag the output as full-range RGB and carry the source's primaries/transfer. We don't
+    // convert gamut/gamma, so the output sits in whatever primaries/transfer the source had.
+    // If the input doesn't state them, fall back to a guess by the *source* resolution
+    // (consistent with our matrix guess: HD -> BT.709, SD -> SMPTE-170M). We set them
+    // explicitly rather than leaving them unknown so madVR can't re-guess from the (possibly
+    // upscaled) output resolution and pick a different gamut/gamma than we assumed.
+    int inW = 0;
+    int inH = 0;
+    GetVideoResolution(inMt, inW, inH);
+    const bool hd = inH >= 720;
+    unsigned primaries = hd ? DXVA_VideoPrimaries_BT709 : DXVA_VideoPrimaries_SMPTE170M;
+    unsigned transfer = DXVA_VideoTransFunc_22_709; // SD and HD share the BT.709 transfer curve
+    if ((inControlFlags & AMCONTROL_USED) && (inControlFlags & AMCONTROL_COLORINFO_PRESENT)) {
+        const auto inExt = reinterpret_cast<const DXVA_ExtendedFormat *>(&inControlFlags);
+        if (inExt->VideoPrimaries != DXVA_VideoPrimaries_Unknown) {
+            primaries = inExt->VideoPrimaries;
+        }
+        if (inExt->VideoTransferFunction != DXVA_VideoTransFunc_Unknown) {
+            transfer = inExt->VideoTransferFunction;
+        }
+    }
+
+    DXVA_ExtendedFormat outExt = {};
+    outExt.SampleFormat = AMCONTROL_USED | AMCONTROL_COLORINFO_PRESENT;
+    outExt.NominalRange = DXVA_NominalRange_0_255;
+    outExt.VideoTransferMatrix = DXVA_VideoTransferMatrix_Unknown; // RGB, no YUV matrix
+    outExt.VideoPrimaries = static_cast<DXVA_VideoPrimaries>(primaries);
+    outExt.VideoTransferFunction = static_cast<DXVA_VideoTransferFunction>(transfer);
+    out->dwControlFlags = *reinterpret_cast<const DWORD *>(&outExt);
+
+    // Active region = the whole frame. madVR can misread an empty rcSource/rcTarget.
+    out->rcSource.left = 0;
+    out->rcSource.top = 0;
+    out->rcSource.right = outW;
+    out->rcSource.bottom = outH;
+    out->rcTarget = out->rcSource;
+
+    out->bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    out->bmiHeader.biWidth = outW;
+    // RGB48 ('RGB0') convention used by LAV/madVR: biHeight is POSITIVE but the rows are still
+    // stored top-down (no flip) — unlike standard BI_RGB DIBs. FrameProcessor packs top-down.
+    out->bmiHeader.biHeight = outH;
+    out->bmiHeader.biPlanes = 1;
+    out->bmiHeader.biBitCount = 48;
+    out->bmiHeader.biCompression = Fourcc('R', 'G', 'B', '0');
+    out->bmiHeader.biSizeImage = imageSize;
+
+    return S_OK;
+}
+
+auto CMLFilter::DecideBufferSize(IMemAllocator *pAlloc, ALLOCATOR_PROPERTIES *pProps) -> HRESULT {
+    CheckPointer(pAlloc, E_POINTER);
+    CheckPointer(pProps, E_POINTER);
+
+    if (m_pOutput == nullptr) {
+        return E_UNEXPECTED;
+    }
+
+    // The output media type is already set during buffer negotiation (the pin may not yet
+    // report IsConnected()); its sample size is the pass-through fallback size.
+    long requiredSize = m_pOutput->CurrentMediaType().GetSampleSize();
+    if (_processor != nullptr) {
+        requiredSize = Rgb48Stride(_processor->OutputWidth()) * _processor->OutputHeight();
+    }
+
+    if (pProps->cBuffers < 1) {
+        pProps->cBuffers = 1;
+    }
+    if (pProps->cbBuffer < requiredSize) {
+        pProps->cbBuffer = requiredSize;
+    }
+
+    ALLOCATOR_PROPERTIES actual = {};
+    const HRESULT hr = pAlloc->SetProperties(pProps, &actual);
+    if (FAILED(hr)) {
+        return hr;
+    }
+    return actual.cbBuffer >= requiredSize ? S_OK : E_FAIL;
+}
+
+auto CMLFilter::Transform(IMediaSample *pIn, IMediaSample *pOut) -> HRESULT {
+    CheckPointer(pIn, E_POINTER);
+    CheckPointer(pOut, E_POINTER);
+
+    // Carry timestamps and flags through to the output sample.
+    REFERENCE_TIME tStart = 0;
+    REFERENCE_TIME tEnd = 0;
+    if (pIn->GetTime(&tStart, &tEnd) == S_OK) {
+        pOut->SetTime(&tStart, &tEnd);
+    }
+    LONGLONG mStart = 0;
+    LONGLONG mEnd = 0;
+    if (pIn->GetMediaTime(&mStart, &mEnd) == S_OK) {
+        pOut->SetMediaTime(&mStart, &mEnd);
+    }
+    pOut->SetSyncPoint(pIn->IsSyncPoint() == S_OK);
+    pOut->SetDiscontinuity(pIn->IsDiscontinuity() == S_OK);
+    pOut->SetPreroll(pIn->IsPreroll() == S_OK);
+
+    if (_processor != nullptr) {
+        return _processor->Process(pIn, pOut);
+    }
+
+    // Pass-through copy.
+    BYTE *src = nullptr;
+    BYTE *dst = nullptr;
+    if (FAILED(pIn->GetPointer(&src)) || FAILED(pOut->GetPointer(&dst))) {
+        return E_FAIL;
+    }
+    const long length = pIn->GetActualDataLength();
+    if (length > pOut->GetSize()) {
+        return E_FAIL;
+    }
+    CopyMemory(dst, src, length);
+    pOut->SetActualDataLength(length);
+    return S_OK;
+}
+
 auto CMLFilter::CompleteConnect(PIN_DIRECTION direction, IPin *pReceivePin) -> HRESULT {
-    const HRESULT hr = CTransInPlaceFilter::CompleteConnect(direction, pReceivePin);
+    const HRESULT hr = CTransformFilter::CompleteConnect(direction, pReceivePin);
     if (FAILED(hr)) {
         return hr;
     }
 
-    // The input's media type (and thus the real video resolution) is known once the
-    // upstream pin connects, before playback starts.
+    // The input's media type (and thus the real video resolution) is known once the upstream
+    // pin connects, before the output pin negotiates and before playback starts.
     if (direction == PINDIR_INPUT) {
         EnsureEngineForInput();
+        SetupProcessor();
     }
 
     return hr;
+}
+
+auto CMLFilter::BreakConnect(PIN_DIRECTION direction) -> HRESULT {
+    if (direction == PINDIR_INPUT) {
+        _processor.reset();
+    }
+    return CTransformFilter::BreakConnect(direction);
 }
 
 auto CMLFilter::EnsureEngineForInput() -> void {
@@ -173,8 +439,8 @@ auto CMLFilter::EnsureEngineForInput() -> void {
         return;  // already built for this resolution/GPU/driver
     }
 
-    // Build synchronously (blocks graph completion until ready) with a responsive
-    // progress window on its own thread.
+    // Build synchronously (blocks graph completion until ready) with a responsive progress
+    // window on its own thread.
     ProgressWindow window;
     window.Open(FILTER_NAME_WIDE);
 
@@ -189,9 +455,57 @@ auto CMLFilter::EnsureEngineForInput() -> void {
         window.Log(result.message);
     }
 
-    // Let the final status be visible briefly before playback proceeds.
     Sleep(result.success ? 600 : 2500);
     window.Close();
+}
+
+auto CMLFilter::SetupProcessor() -> void {
+    _processor.reset();
+
+    Settings settings;
+    settings.Load();
+    if (settings.modelPath.empty() || !std::filesystem::exists(settings.modelPath)) {
+        return;  // pass-through
+    }
+
+    int width = 0;
+    int height = 0;
+    if (m_pInput == nullptr || !GetVideoResolution(m_pInput->CurrentMediaType(), width, height)) {
+        return;
+    }
+
+    TensorRTEngineBuilder builder;
+    const EngineBuildRequest request { .onnxPath = settings.modelPath, .width = width, .height = height };
+    if (!builder.Exists(request)) {
+        return;  // the engine build failed earlier; fall back to pass-through
+    }
+
+    const CMediaType &mt = m_pInput->CurrentMediaType();
+    YuvToRgbConverter::Kind kind = YuvToRgbConverter::Kind::NV12;
+    if (!KindForSubtype(*mt.Subtype(), kind)) {
+        return; // unsupported subtype -> pass-through
+    }
+    const bool isRgb = IsRgbKind(kind);
+
+    bool bt709 = false;
+    bool fullRange = false;
+    ResolveColorInfo(mt, height, isRgb, bt709, fullRange);
+
+    // RGB DIBs are stored bottom-up when biHeight is positive.
+    bool bottomUp = false;
+    if (isRgb) {
+        int signedHeight = 0;
+        if (mt.formattype == FORMAT_VideoInfo2 && mt.cbFormat >= sizeof(VIDEOINFOHEADER2)) {
+            signedHeight = reinterpret_cast<const VIDEOINFOHEADER2 *>(mt.pbFormat)->bmiHeader.biHeight;
+        } else if (mt.formattype == FORMAT_VideoInfo && mt.cbFormat >= sizeof(VIDEOINFOHEADER)) {
+            signedHeight = reinterpret_cast<const VIDEOINFOHEADER *>(mt.pbFormat)->bmiHeader.biHeight;
+        }
+        bottomUp = signedHeight > 0;
+    }
+
+    std::wstring error;
+    _processor = FrameProcessor::Create(builder.EnginePath(request), kind, bt709, fullRange, bottomUp, error);
+    // On failure _processor stays null and the filter passes frames through unchanged.
 }
 
 auto CMLFilter::ShouldProcessCurrentFile() -> bool {
@@ -244,9 +558,6 @@ auto CMLFilter::ScheduleSelfRemoval() -> void {
         return;
     }
 
-    // Keep both objects alive for the duration of the asynchronous removal. The removal
-    // runs on its own thread so it doesn't re-enter the graph while it is being built;
-    // RemoveFilter blocks until the graph lock is free, then detaches this filter.
     graph->AddRef();
     AddRef();
     std::thread([this, graph]() {
@@ -254,11 +565,6 @@ auto CMLFilter::ScheduleSelfRemoval() -> void {
         graph->Release();
         Release();
     }).detach();
-}
-
-auto CMLFilter::Transform(IMediaSample * /*pSample*/) -> HRESULT {
-    // Pass-through: the sample is delivered downstream unchanged.
-    return S_OK;
 }
 
 auto STDMETHODCALLTYPE CMLFilter::GetPages(CAUUID *pPages) -> HRESULT {

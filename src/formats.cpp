@@ -6,18 +6,7 @@
 
 namespace MLFilter {
 
-namespace {
-
-constexpr auto Fourcc(char a, char b, char c, char d) -> DWORD {
-    return static_cast<DWORD>(static_cast<unsigned char>(a))
-         | (static_cast<DWORD>(static_cast<unsigned char>(b)) << 8)
-         | (static_cast<DWORD>(static_cast<unsigned char>(c)) << 16)
-         | (static_cast<DWORD>(static_cast<unsigned char>(d)) << 24);
-}
-
-}
-
-auto SupportedSubtypes() -> const std::vector<GUID> & {
+auto SupportedInputSubtypes() -> const std::vector<GUID> & {
     static const std::vector<GUID> subtypes = [] {
         // YUV formats are FOURCC-based subtypes.
         static const DWORD yuvFourccs[] = {
@@ -57,13 +46,19 @@ auto SupportedSubtypes() -> const std::vector<GUID> & {
     return subtypes;
 }
 
-auto IsSupportedSubtype(const GUID &subtype) -> bool {
-    for (const GUID &candidate : SupportedSubtypes()) {
+auto IsSupportedInputSubtype(const GUID &subtype) -> bool {
+    for (const GUID &candidate : SupportedInputSubtypes()) {
         if (subtype == candidate) {
             return true;
         }
     }
     return false;
+}
+
+auto OutputSubtype() -> const GUID & {
+    // RGB48: 16-bit-per-channel packed RGB, FOURCC 'RGB0' (same subtype LAV/avisynth_filter use).
+    static const GUID subtype = FOURCCMap(Fourcc('R', 'G', 'B', '0'));
+    return subtype;
 }
 
 }

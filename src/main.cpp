@@ -21,7 +21,7 @@ namespace MLFilter {
 
 namespace {
 
-// Media types are filled in at registration time from the shared SupportedSubtypes() list.
+// Media types are filled in at registration time from SupportedInputSubtypes()/OutputSubtype().
 REGFILTERPINS REG_PINS[] {
     {
         .strName = nullptr,
@@ -55,25 +55,28 @@ AMOVIESETUP_FILTER REG_FILTER {
     .lpPin = REG_PINS,
 };
 
-// Registers/unregisters the filter. On register, the pin media types are populated from
-// SupportedSubtypes() so the graph builder (and MPC-BE's UI) see the exact decoded
-// subtypes we accept, rather than "any video".
+// Registers/unregisters the filter. On register, the input pin advertises the decoded
+// subtypes we accept and the output pin advertises RGB48.
 auto RegisterFilter(BOOL doRegister) -> HRESULT {
     if (!doRegister) {
         return AMovieDllRegisterServer2(FALSE);
     }
 
-    const std::vector<GUID> &subtypes = SupportedSubtypes();
-    std::vector<REGPINTYPES> pinTypes;
-    pinTypes.reserve(subtypes.size());
-    for (const GUID &subtype : subtypes) {
-        pinTypes.push_back(REGPINTYPES { .clsMajorType = &MEDIATYPE_Video, .clsMinorType = &subtype });
+    // Held in statics so the pointers remain valid for the duration of registration.
+    // clsMinorType points at the stable GUIDs owned by formats.cpp.
+    const std::vector<GUID> &inputSubtypes = SupportedInputSubtypes();
+    static std::vector<REGPINTYPES> inputTypes;
+    inputTypes.clear();
+    inputTypes.reserve(inputSubtypes.size());
+    for (const GUID &subtype : inputSubtypes) {
+        inputTypes.push_back(REGPINTYPES { .clsMajorType = &MEDIATYPE_Video, .clsMinorType = &subtype });
     }
+    static const REGPINTYPES outputType { .clsMajorType = &MEDIATYPE_Video, .clsMinorType = &OutputSubtype() };
 
-    for (REGFILTERPINS &pin : REG_PINS) {
-        pin.nMediaTypes = static_cast<UINT>(pinTypes.size());
-        pin.lpMediaType = pinTypes.data();
-    }
+    REG_PINS[0].nMediaTypes = static_cast<UINT>(inputTypes.size());
+    REG_PINS[0].lpMediaType = inputTypes.data();
+    REG_PINS[1].nMediaTypes = 1;
+    REG_PINS[1].lpMediaType = &outputType;
 
     return AMovieDllRegisterServer2(TRUE);
 }

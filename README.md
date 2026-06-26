@@ -27,6 +27,14 @@ driver, GPU, or TensorRT change, the engines for the old configuration are delet
 
 ## Development setup
 
+This repository uses git submodules (the [zimg](https://github.com/sekrit-twc/zimg) color
+conversion library, which itself pulls in graphengine). Clone with submodules, or initialize
+them in an existing clone, or the build won't find `zimg.h`:
+
+```
+git clone --recurse-submodules <url>
+```
+
 The engine-building backend uses NVIDIA TensorRT and the CUDA Toolkit. Install them with the
 zip-package approach below before building.
 

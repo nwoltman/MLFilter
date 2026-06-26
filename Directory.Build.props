@@ -1,0 +1,19 @@
+<Project>
+  <!--
+    zimg is consumed as a pristine git submodule (deps/zimg), so we can't edit its project
+    files. Its project defaults to the dynamic CRT (/MD), which would fail to link into the
+    .ax (MLFilter and baseclasses use the static CRT, /MT). Force the zimg project's CRT to
+    match here, without modifying the submodule. Auto-imported by every project under the
+    repo root; scoped to the zimg project so nothing else is affected.
+  -->
+  <ItemDefinitionGroup Condition="'$(MSBuildProjectName)' == 'zimg' And '$(Configuration)' == 'Release'">
+    <ClCompile>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(MSBuildProjectName)' == 'zimg' And '$(Configuration)' == 'Debug'">
+    <ClCompile>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+    </ClCompile>
+  </ItemDefinitionGroup>
+</Project>

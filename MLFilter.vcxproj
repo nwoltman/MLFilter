@@ -26,7 +26,7 @@
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
-      <AdditionalIncludeDirectories>$(SolutionDir)deps\baseclasses\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)deps\baseclasses\src;$(SolutionDir)deps\zimg\src\zimg\api;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
@@ -38,6 +38,9 @@
     <ClInclude Include="src\constants.h" />
     <ClInclude Include="src\filter.h" />
     <ClInclude Include="src\formats.h" />
+    <ClInclude Include="src\frame_processor.h" />
+    <ClInclude Include="src\color\yuv_to_rgb.h" />
+    <ClInclude Include="src\engine\inference_session.h" />
     <ClInclude Include="src\guids.h" />
     <ClInclude Include="src\progress_window.h" />
     <ClInclude Include="src\prop_settings.h" />
@@ -53,6 +56,9 @@
   <ItemGroup>
     <ClCompile Include="src\filter.cpp" />
     <ClCompile Include="src\formats.cpp" />
+    <ClCompile Include="src\frame_processor.cpp" />
+    <ClCompile Include="src\color\yuv_to_rgb.cpp" />
+    <ClCompile Include="src\engine\inference_session.cpp" />
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\progress_window.cpp" />
     <ClCompile Include="src\prop_settings.cpp" />
@@ -72,6 +78,9 @@
   <ItemGroup>
     <ProjectReference Include="deps\baseclasses\baseclasses.vcxproj">
       <Project>{6D6FABA3-51A7-4162-B5A8-ADA838387D60}</Project>
+    </ProjectReference>
+    <ProjectReference Include="deps\zimg\_msvc\zimg\zimg.vcxproj">
+      <Project>{C8629E57-4D6F-40FA-82FC-B39824195932}</Project>
     </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
