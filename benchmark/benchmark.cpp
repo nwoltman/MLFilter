@@ -9,9 +9,8 @@
 // It runs MLFilter's *actual* per-frame pipeline — the same code FrameProcessor uses
 // during playback:
 //   1. zimg YUV -> planar RGB fp16 conversion (YuvToRgbConverter)
-//   2. the TensorRT engine: host->device upload, enqueueV3, device->host download
-//      (InferenceSession) — the stage that differs from the vsmlrt build
-//   3. the RGB48 pack (HalfToUnorm16 per channel)
+//   2. the TensorRT engine: host->device upload, enqueueV3, the on-GPU fp16->RGB48 conversion
+//      kernel, and the device->host copy into the (RGB48) output buffer (InferenceSession)
 // over real frames decoded from a video file by ffmpeg, and reports end-to-end
 // throughput plus a per-stage breakdown so the inference cost is visible in isolation.
 //
@@ -22,7 +21,6 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
-#include <cstring>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -39,63 +37,6 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 using MLFilter::YuvToRgbConverter;
-
-// ---- text helpers -------------------------------------------------------------------
-
-auto Narrow(const std::wstring &w) -> std::string {
-    if (w.empty()) {
-        return {};
-    }
-    const int needed = WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), nullptr, 0, nullptr, nullptr);
-    std::string out(static_cast<size_t>(needed), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), out.data(), needed, nullptr, nullptr);
-    return out;
-}
-
-auto Widen(const std::string &s) -> std::wstring {
-    if (s.empty()) {
-        return {};
-    }
-    const int needed = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
-    std::wstring out(static_cast<size_t>(needed), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), out.data(), needed);
-    return out;
-}
-
-// ---- fp16 -> 16-bit unorm pack (mirrors FrameProcessor) -----------------------------
-
-auto HalfToFloat(uint16_t h) -> float {
-    const uint32_t sign = static_cast<uint32_t>(h & 0x8000u) << 16;
-    uint32_t exp = (h >> 10) & 0x1Fu;
-    uint32_t mant = h & 0x3FFu;
-    uint32_t bits;
-    if (exp == 0) {
-        if (mant == 0) {
-            bits = sign;
-        } else {
-            exp = 1;
-            while ((mant & 0x400u) == 0) {
-                mant <<= 1;
-                --exp;
-            }
-            mant &= 0x3FFu;
-            bits = sign | ((exp + (127 - 15)) << 23) | (mant << 13);
-        }
-    } else if (exp == 0x1Fu) {
-        bits = sign | 0x7F800000u | (mant << 13);
-    } else {
-        bits = sign | ((exp + (127 - 15)) << 23) | (mant << 13);
-    }
-    float out;
-    std::memcpy(&out, &bits, sizeof(out));
-    return out;
-}
-
-auto HalfToUnorm16(uint16_t h) -> uint16_t {
-    float f = HalfToFloat(h);
-    f = std::clamp(f, 0.0f, 1.0f);
-    return static_cast<uint16_t>(f * 65535.0f + 0.5f);
-}
 
 // ---- child-process helpers ----------------------------------------------------------
 
@@ -380,8 +321,10 @@ auto wmain(int argc, wchar_t **argv) -> int {
     const size_t frameBytes = static_cast<size_t>(video.width) * video.height * 3 / 2 * sampleBytes;
 
     std::vector<unsigned char> frame(frameBytes);
-    std::vector<uint16_t> download(static_cast<size_t>(3) * outW * outH);
+    // The engine downloads packed RGB48 directly (the fp16->RGB48 conversion runs on the GPU).
+    // Tight rows: stride = outW * 3 uint16 = outW * 6 bytes.
     std::vector<uint16_t> packed(static_cast<size_t>(3) * outW * outH);
+    const size_t packedStride = static_cast<size_t>(outW) * 6;
 
     FrameReader reader;
     std::wstring ffmpegCmd = L"ffmpeg -hide_banner -loglevel error -i \"" + args.videoPath +
@@ -392,7 +335,7 @@ auto wmain(int argc, wchar_t **argv) -> int {
     }
 
     // Per-stage accumulators (timed frames only).
-    double convertSec = 0, inferSec = 0, packSec = 0;
+    double convertSec = 0, inferSec = 0;
     int warmedUp = 0;
     int timed = 0;
     Clock::time_point timedStart;
@@ -418,28 +361,15 @@ auto wmain(int argc, wchar_t **argv) -> int {
             return 1;
         }
         const auto t1 = Clock::now();
-        if (!session->Upload(rgb) || !session->Infer() || !session->Download(download.data())) {
+        if (!session->Upload(rgb) || !session->Infer() || !session->Download(packed.data(), packedStride)) {
             wprintf(L"Inference failed.\n");
             return 1;
         }
         const auto t2 = Clock::now();
-        {
-            const size_t plane = static_cast<size_t>(outW) * outH;
-            const uint16_t *r = download.data();
-            const uint16_t *g = r + plane;
-            const uint16_t *b = g + plane;
-            for (size_t i = 0; i < plane; ++i) {
-                packed[3 * i + 0] = HalfToUnorm16(r[i]);
-                packed[3 * i + 1] = HalfToUnorm16(g[i]);
-                packed[3 * i + 2] = HalfToUnorm16(b[i]);
-            }
-        }
-        const auto t3 = Clock::now();
 
         if (timing) {
             convertSec += std::chrono::duration<double>(t1 - t0).count();
             inferSec += std::chrono::duration<double>(t2 - t1).count();
-            packSec += std::chrono::duration<double>(t3 - t2).count();
             ++timed;
         } else {
             ++warmedUp;
@@ -452,7 +382,7 @@ auto wmain(int argc, wchar_t **argv) -> int {
     }
 
     const double wallSec = std::chrono::duration<double>(Clock::now() - timedStart).count();
-    const double pipelineSec = convertSec + inferSec + packSec;
+    const double pipelineSec = convertSec + inferSec;
     const auto fps = [&](double sec) { return sec > 0 ? timed / sec : 0.0; };
     const auto ms = [&](double sec) { return sec / timed * 1000.0; };
     const auto pct = [&](double sec) { return pipelineSec > 0 ? sec / pipelineSec * 100.0 : 0.0; };
@@ -460,11 +390,10 @@ auto wmain(int argc, wchar_t **argv) -> int {
     wprintf(L"\n======================== Results (%d frames) ========================\n", timed);
     wprintf(L"  Stage          avg/frame       total      throughput    share\n");
     wprintf(L"  YUV->RGB       %8.3f ms   %8.3f s   %8.1f fps   %5.1f%%\n", ms(convertSec), convertSec, fps(convertSec), pct(convertSec));
-    wprintf(L"  Inference      %8.3f ms   %8.3f s   %8.1f fps   %5.1f%%   <-- TensorRT (upload+infer+download)\n", ms(inferSec), inferSec, fps(inferSec), pct(inferSec));
-    wprintf(L"  RGB48 pack     %8.3f ms   %8.3f s   %8.1f fps   %5.1f%%\n", ms(packSec), packSec, fps(packSec), pct(packSec));
+    wprintf(L"  Inference      %8.3f ms   %8.3f s   %8.1f fps   %5.1f%%   <-- TensorRT (upload+infer+RGB48 convert+download)\n", ms(inferSec), inferSec, fps(inferSec), pct(inferSec));
     wprintf(L"  --------------------------------------------------------------------\n");
     wprintf(L"  Pipeline       %8.3f ms   %8.3f s   %8.1f fps   %5.1f%%   (sum of stages, serial)\n", ms(pipelineSec), pipelineSec, fps(pipelineSec), pct(pipelineSec));
-    wprintf(L"  End-to-end     %8.3f ms   %8.3f s   %8.1f fps           (incl. ffmpeg decode wait)\n", ms(wallSec), wallSec, fps(wallSec));
+    wprintf(L"  End-to-end     %8.3f ms   %8.3f s   %8.1f fps             (incl. ffmpeg decode wait)\n", ms(wallSec), wallSec, fps(wallSec));
     wprintf(L"====================================================================\n");
 
     return 0;

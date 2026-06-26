@@ -16,9 +16,9 @@ namespace MLFilter {
 
 class InferenceSession;
 
-// One per pin connection. Owns the zimg converter, the TensorRT session, and a host buffer
-// for the engine output. Process() runs a full frame: YUV -> RGB fp16 (CPU/zimg) -> engine
-// (GPU) -> RGB48 (CPU pack) into the output sample.
+// One per pin connection. Owns the zimg converter and the TensorRT session. Process() runs a
+// full frame: YUV -> RGB fp16 (CPU/zimg) -> engine + RGB48 conversion (GPU) -> copy into the
+// output sample.
 class FrameProcessor {
 public:
     // Builds the session (deserializing the engine) and the converter for the given input
@@ -48,7 +48,6 @@ private:
 
     std::unique_ptr<InferenceSession> _session;
     std::unique_ptr<YuvToRgbConverter> _converter;
-    std::unique_ptr<unsigned short[]> _download;
 
     int _outW = 0;
     int _outH = 0;

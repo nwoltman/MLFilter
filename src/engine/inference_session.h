@@ -41,15 +41,24 @@ public:
     auto OutputWidth() const -> int { return _outW; }
     auto OutputHeight() const -> int { return _outH; }
 
-    // Sizes in bytes of the planar-RGB fp16 input/output buffers (3 * W * H * sizeof(half)).
+    // Sizes in bytes of the planar-RGB fp16 input/output buffers (3 * W * H * sizeof(half)). The
+    // packed RGB48 buffer Infer() produces is the same size (also 3 * W * H * 2 bytes).
     auto InputBytes() const -> size_t { return static_cast<size_t>(3) * _inW * _inH * sizeof(unsigned short); }
     auto OutputBytes() const -> size_t { return static_cast<size_t>(3) * _outW * _outH * sizeof(unsigned short); }
 
-    // host -> device input, run the network, device output -> host. host buffers are planar
-    // RGB fp16 of InputBytes()/OutputBytes(). Returns false on a CUDA/TensorRT error.
+    // host -> device input (host buffer is planar RGB fp16 of InputBytes()). Returns false on a
+    // CUDA error.
     auto Upload(const void *hostInput) -> bool;
+
+    // Runs the network and, on the same stream, the fp16-planar -> packed-RGB48 conversion kernel.
+    // Returns false on a CUDA/TensorRT error.
     auto Infer() -> bool;
-    auto Download(void *hostOutput) -> bool;
+
+    // Copies the packed, top-down RGB48 result from the device into hostOutput, writing each row
+    // at dstStrideBytes (the renderer allocator's row pitch, which may exceed width*6). Blocks
+    // until the whole stream (upload, inference, conversion, copy) has completed. Returns false on
+    // a CUDA error.
+    auto Download(void *hostOutput, size_t dstStrideBytes) -> bool;
 
 private:
     InferenceSession() = default;
@@ -61,6 +70,7 @@ private:
 
     void *_dInput = nullptr;
     void *_dOutput = nullptr;
+    void *_dRgb48 = nullptr;
 
     std::string _inputName;
     std::string _outputName;

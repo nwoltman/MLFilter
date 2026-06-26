@@ -1,0 +1,31 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!--
+    CUDA build customization for the fp16 -> RGB48 conversion kernel (src\engine\fp16_to_rgb48.cu).
+
+    Imported in the project's "ExtensionSettings" ImportGroup (cuda.targets is the matching
+    "ExtensionTargets" import). Pulls in the CUDA Toolkit's MSBuild integration straight from
+    CUDA_PATH (set by the toolkit installer), so nvcc works without copying the build
+    customizations into Visual Studio's BuildCustomizations folder.
+
+    Update CudaVersion if you install a different toolkit (the file name embeds the version).
+  -->
+  <PropertyGroup Label="UserMacros">
+    <CudaVersion>13.3</CudaVersion>
+    <CudaCustomizationsDir>$(CUDA_PATH)\extras\visual_studio_integration\MSBuildExtensions\</CudaCustomizationsDir>
+  </PropertyGroup>
+
+  <Import Project="$(CudaCustomizationsDir)CUDA $(CudaVersion).props" />
+
+  <ItemDefinitionGroup>
+    <CudaCompile>
+      <TargetMachinePlatform>64</TargetMachinePlatform>
+      <!-- Embed PTX for the lowest architecture nvcc 13.x supports (compute_75, Turing). The
+           driver JIT-compiles it to the actual GPU at module load, so a single binary runs on
+           every CUDA-13-supported card (Turing and newer) without per-arch SASS. -->
+      <CodeGeneration>compute_75,compute_75</CodeGeneration>
+      <!-- Match the C++ project's static CRT (/MT, /MTd) so nvcc's host compilation links. -->
+      <Runtime Condition="'$(Configuration)' == 'Debug'">MTd</Runtime>
+      <Runtime Condition="'$(Configuration)' == 'Release'">MT</Runtime>
+    </CudaCompile>
+  </ItemDefinitionGroup>
+</Project>

@@ -25,6 +25,24 @@ Built engines are written to `%LOCALAPPDATA%\MLFilter\Engines\`. Each engine fil
 the model, resolution, GPU name, driver version, and TensorRT version. When you rebuild after a
 driver, GPU, or TensorRT change, the engines for the old configuration are deleted automatically.
 
+## System requirements
+
+You need:
+
+- **An NVIDIA graphics card, GeForce RTX 20-series / GTX 16-series or newer.** That includes the
+  RTX 30, 40, and 50 series. Older NVIDIA cards (GTX 10-series and earlier) won't work, and neither
+  will AMD or Intel graphics for now.
+- **An up-to-date NVIDIA driver** (version 580 or newer). If you have any trouble, the first thing
+  to try is updating your driver from NVIDIA's website or GeForce Experience.
+- **64-bit Windows.**
+- **A media player that supports external DirectShow filters**, such as MPC-BE.
+
+Everything else the filter needs is included in the download.
+
+The first time you play a video at a new resolution, the filter spends a few moments preparing
+itself for your card before playback starts. This happens once per resolution; after that, videos
+of that size start right away.
+
 ## Development setup
 
 This repository uses git submodules (the [zimg](https://github.com/sekrit-twc/zimg) color

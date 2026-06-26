@@ -1,0 +1,8 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!--
+    Matching "ExtensionTargets" import for cuda.props. Brings in the CUDA Toolkit's build target
+    (it compiles/links the CudaCompile items via nvcc) straight from CUDA_PATH. Keep CudaVersion in
+    sync with cuda.props.
+  -->
+  <Import Project="$(CUDA_PATH)\extras\visual_studio_integration\MSBuildExtensions\CUDA $(CudaVersion).targets" />
+</Project>

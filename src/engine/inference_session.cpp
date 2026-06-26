@@ -2,11 +2,14 @@
 
 #include "inference_session.h"
 
+#include <cstdint>
 #include <fstream>
 #include <vector>
 
 #include <cuda_runtime.h>
 #include <NvInfer.h>
+
+#include "fp16_to_rgb48.h"
 
 namespace MLFilter {
 
@@ -106,7 +109,8 @@ auto InferenceSession::Create(const std::filesystem::path &enginePath, std::wstr
     }
 
     if (cudaMalloc(&session->_dInput, session->InputBytes()) != cudaSuccess ||
-        cudaMalloc(&session->_dOutput, session->OutputBytes()) != cudaSuccess) {
+        cudaMalloc(&session->_dOutput, session->OutputBytes()) != cudaSuccess ||
+        cudaMalloc(&session->_dRgb48, session->OutputBytes()) != cudaSuccess) {
         error = L"Failed to allocate GPU memory for inference.";
         return nullptr;
     }
@@ -131,6 +135,7 @@ InferenceSession::~InferenceSession() {
     }
     cudaFree(_dInput);
     cudaFree(_dOutput);
+    cudaFree(_dRgb48);
     // TensorRT 10/11 objects are released with delete (destroy() was removed).
     delete _context;
     delete _engine;
@@ -142,11 +147,20 @@ auto InferenceSession::Upload(const void *hostInput) -> bool {
 }
 
 auto InferenceSession::Infer() -> bool {
-    return _context->enqueueV3(_stream);
+    if (!_context->enqueueV3(_stream)) {
+        return false;
+    }
+    // Convert fp16 planar -> packed RGB48 on the same stream, right after inference, so it overlaps
+    // and needs no extra synchronization.
+    return LaunchFp16PlanarToRgb48(_dOutput, _dRgb48, _outW, _outH, _stream) == cudaSuccess;
 }
 
-auto InferenceSession::Download(void *hostOutput) -> bool {
-    if (cudaMemcpyAsync(hostOutput, _dOutput, OutputBytes(), cudaMemcpyDeviceToHost, _stream) != cudaSuccess) {
+auto InferenceSession::Download(void *hostOutput, size_t dstStrideBytes) -> bool {
+    // The packed RGB48 result is tightly stored (width*3 uint16 per row); copy it straight into the
+    // output sample, expanding each row to the allocator's (possibly padded) destination pitch.
+    const size_t rowBytes = static_cast<size_t>(_outW) * 3 * sizeof(uint16_t);
+    if (cudaMemcpy2DAsync(hostOutput, dstStrideBytes, _dRgb48, rowBytes, rowBytes, _outH,
+                          cudaMemcpyDeviceToHost, _stream) != cudaSuccess) {
         return false;
     }
     return cudaStreamSynchronize(_stream) == cudaSuccess;

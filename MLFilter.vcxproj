@@ -21,6 +21,9 @@
   <Import Project="$(SolutionDir)common.props" />
   <Import Project="$(SolutionDir)tensorrt.props" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+    <Import Project="$(SolutionDir)cuda.props" />
+  </ImportGroup>
   <PropertyGroup>
     <TargetExt>.ax</TargetExt>
   </PropertyGroup>
@@ -49,9 +52,13 @@
     <ClInclude Include="src\settings.h" />
     <ClInclude Include="src\engine\engine_builder.h" />
     <ClInclude Include="src\engine\engine_naming.h" />
+    <ClInclude Include="src\engine\fp16_to_rgb48.h" />
     <ClInclude Include="src\engine\gpu_info.h" />
     <ClInclude Include="src\engine\onnx_fp16.h" />
     <ClInclude Include="src\engine\tensorrt_engine_builder.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <CudaCompile Include="src\engine\fp16_to_rgb48.cu" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\filter.cpp" />
@@ -84,4 +91,7 @@
     </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+    <Import Project="$(SolutionDir)cuda.targets" />
+  </ImportGroup>
 </Project>
