@@ -13,6 +13,7 @@ class IExecutionContext;
 }
 
 struct CUstream_st;
+struct CUevent_st;
 
 namespace MLFilter {
 
@@ -62,6 +63,18 @@ public:
     // a CUDA error.
     auto Download(void *hostOutput, size_t dstStrideBytes) -> bool;
 
+    // GPU-timeline durations (milliseconds) of the last completed Upload/Infer/Download cycle,
+    // measured with CUDA events recorded on the stream. Valid only after a Download() has
+    // synchronized the stream. Diagnostic only (used by the benchmark to size multi-stream gains):
+    // upload = H2D copies + clamp, compute = enqueueV3 + RGB48 kernel, download = D2H copy. Returns
+    // false on a CUDA error.
+    struct GpuStageTimings {
+        double uploadMs = 0;
+        double computeMs = 0;
+        double downloadMs = 0;
+    };
+    auto LastGpuTimings(GpuStageTimings &timings) const -> bool;
+
 private:
     InferenceSession() = default;
 
@@ -69,6 +82,12 @@ private:
     nvinfer1::ICudaEngine *_engine = nullptr;
     nvinfer1::IExecutionContext *_context = nullptr;
     CUstream_st *_stream = nullptr;
+
+    // Stream markers bracketing the three GPU phases, for the LastGpuTimings() diagnostic.
+    CUevent_st *_evStart = nullptr;
+    CUevent_st *_evUploaded = nullptr;
+    CUevent_st *_evInferred = nullptr;
+    CUevent_st *_evDownloaded = nullptr;
 
     void *_dInput = nullptr;
     void *_dOutput = nullptr;

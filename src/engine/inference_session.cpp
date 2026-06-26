@@ -126,10 +126,30 @@ auto InferenceSession::Create(const std::filesystem::path &enginePath, std::wstr
         return nullptr;
     }
 
+    if (cudaEventCreate(&session->_evStart) != cudaSuccess ||
+        cudaEventCreate(&session->_evUploaded) != cudaSuccess ||
+        cudaEventCreate(&session->_evInferred) != cudaSuccess ||
+        cudaEventCreate(&session->_evDownloaded) != cudaSuccess) {
+        error = L"Failed to create CUDA timing events.";
+        return nullptr;
+    }
+
     return session;
 }
 
 InferenceSession::~InferenceSession() {
+    if (_evStart != nullptr) {
+        cudaEventDestroy(_evStart);
+    }
+    if (_evUploaded != nullptr) {
+        cudaEventDestroy(_evUploaded);
+    }
+    if (_evInferred != nullptr) {
+        cudaEventDestroy(_evInferred);
+    }
+    if (_evDownloaded != nullptr) {
+        cudaEventDestroy(_evDownloaded);
+    }
     if (_stream != nullptr) {
         cudaStreamDestroy(_stream);
     }
@@ -143,6 +163,9 @@ InferenceSession::~InferenceSession() {
 }
 
 auto InferenceSession::Upload(const void *r, const void *g, const void *b, size_t srcStrideBytes) -> bool {
+    // Mark the start of the upload phase on the stream (for the LastGpuTimings() diagnostic).
+    cudaEventRecord(_evStart, _stream);
+
     // Copy each padded-stride planar channel into its (tightly packed) slot of the NCHW input
     // buffer; cudaMemcpy2DAsync drops the source row padding. From pinned memory these run as
     // async DMAs that overlap the rest of the stream.
@@ -157,7 +180,11 @@ auto InferenceSession::Upload(const void *r, const void *g, const void *b, size_
         }
     }
     // Apply the [0,1] model-input clamp on the device, so the planar fp16 can be uploaded unclamped.
-    return LaunchClampHalf01(_dInput, static_cast<size_t>(3) * _inW * _inH, _stream) == cudaSuccess;
+    if (LaunchClampHalf01(_dInput, static_cast<size_t>(3) * _inW * _inH, _stream) != cudaSuccess) {
+        return false;
+    }
+    cudaEventRecord(_evUploaded, _stream);
+    return true;
 }
 
 auto InferenceSession::Infer() -> bool {
@@ -166,7 +193,11 @@ auto InferenceSession::Infer() -> bool {
     }
     // Convert fp16 planar -> packed RGB48 on the same stream, right after inference, so it overlaps
     // and needs no extra synchronization.
-    return LaunchFp16PlanarToRgb48(_dOutput, _dRgb48, _outW, _outH, _stream) == cudaSuccess;
+    if (LaunchFp16PlanarToRgb48(_dOutput, _dRgb48, _outW, _outH, _stream) != cudaSuccess) {
+        return false;
+    }
+    cudaEventRecord(_evInferred, _stream);
+    return true;
 }
 
 auto InferenceSession::Download(void *hostOutput, size_t dstStrideBytes) -> bool {
@@ -177,7 +208,24 @@ auto InferenceSession::Download(void *hostOutput, size_t dstStrideBytes) -> bool
                           cudaMemcpyDeviceToHost, _stream) != cudaSuccess) {
         return false;
     }
+    cudaEventRecord(_evDownloaded, _stream);
     return cudaStreamSynchronize(_stream) == cudaSuccess;
+}
+
+auto InferenceSession::LastGpuTimings(GpuStageTimings &timings) const -> bool {
+    // The stream is synchronized by Download(), so all four markers have completed. Each interval is
+    // the GPU-timeline duration of that phase: upload (H2D + clamp), compute (enqueueV3 + RGB48
+    // kernel), download (D2H copy).
+    float upload = 0, compute = 0, download = 0;
+    if (cudaEventElapsedTime(&upload, _evStart, _evUploaded) != cudaSuccess ||
+        cudaEventElapsedTime(&compute, _evUploaded, _evInferred) != cudaSuccess ||
+        cudaEventElapsedTime(&download, _evInferred, _evDownloaded) != cudaSuccess) {
+        return false;
+    }
+    timings.uploadMs = upload;
+    timings.computeMs = compute;
+    timings.downloadMs = download;
+    return true;
 }
 
 }

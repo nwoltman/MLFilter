@@ -335,9 +335,12 @@ auto wmain(int argc, wchar_t **argv) -> int {
     }
 
     // Per-stage accumulators (timed frames only). The convert stage is broken down further into
-    // its CPU sub-passes (deinterleave -> zimg) so the cost is visible.
+    // its CPU sub-passes (deinterleave -> zimg) so the cost is visible. The inference stage is
+    // broken down (via on-stream CUDA events) into upload / GPU compute / download so the
+    // overlappable transfer cost is separable from the serial compute cost (sizing multi-stream).
     double convertSec = 0, inferSec = 0;
     double deinterleaveSec = 0, zimgSec = 0;
+    double uploadSec = 0, computeSec = 0, downloadSec = 0;
     int warmedUp = 0;
     int timed = 0;
     Clock::time_point timedStart;
@@ -376,6 +379,12 @@ auto wmain(int argc, wchar_t **argv) -> int {
             inferSec += std::chrono::duration<double>(t2 - t1).count();
             deinterleaveSec += stage.deinterleaveSec;
             zimgSec += stage.zimgSec;
+            MLFilter::InferenceSession::GpuStageTimings gpu;
+            if (session->LastGpuTimings(gpu)) {
+                uploadSec += gpu.uploadMs / 1000.0;
+                computeSec += gpu.computeMs / 1000.0;
+                downloadSec += gpu.downloadMs / 1000.0;
+            }
             ++timed;
         } else {
             ++warmedUp;
@@ -399,10 +408,36 @@ auto wmain(int argc, wchar_t **argv) -> int {
     wprintf(L"    deinterleave %8.3f ms   %8.3f s   %8.1f fps   %5.1f%%   (CPU unpack to planar)\n", ms(deinterleaveSec), deinterleaveSec, fps(deinterleaveSec), pct(deinterleaveSec));
     wprintf(L"    zimg         %8.3f ms   %8.3f s   %8.1f fps   %5.1f%%   (CPU upsample+matrix+fp16)\n", ms(zimgSec), zimgSec, fps(zimgSec), pct(zimgSec));
     wprintf(L"  Inference      %8.3f ms   %8.3f s   %8.1f fps   %5.1f%%   <-- TensorRT (upload+clamp+infer+RGB48 convert+download)\n", ms(inferSec), inferSec, fps(inferSec), pct(inferSec));
+    wprintf(L"    upload       %8.3f ms   %8.3f s   %8.1f fps   %5.1f%%   (GPU: H2D copy + clamp)\n", ms(uploadSec), uploadSec, fps(uploadSec), pct(uploadSec));
+    wprintf(L"    compute      %8.3f ms   %8.3f s   %8.1f fps   %5.1f%%   (GPU: enqueueV3 + RGB48 kernel)\n", ms(computeSec), computeSec, fps(computeSec), pct(computeSec));
+    wprintf(L"    download     %8.3f ms   %8.3f s   %8.1f fps   %5.1f%%   (GPU: D2H copy)\n", ms(downloadSec), downloadSec, fps(downloadSec), pct(downloadSec));
     wprintf(L"  --------------------------------------------------------------------\n");
     wprintf(L"  Pipeline       %8.3f ms   %8.3f s   %8.1f fps   %5.1f%%   (sum of stages, serial)\n", ms(pipelineSec), pipelineSec, fps(pipelineSec), pct(pipelineSec));
     wprintf(L"  End-to-end     %8.3f ms   %8.3f s   %8.1f fps             (incl. ffmpeg decode wait)\n", ms(wallSec), wallSec, fps(wallSec));
     wprintf(L"====================================================================\n");
+
+    // Multi-stream / multi-thread ceiling: with enough streams + threads, the CPU convert, the two
+    // copy engines (H2D / D2H) and the GPU compute all overlap, so steady-state per-frame time is
+    // bounded by the single busiest resource. This is the best Change B (+ hiding the CPU convert)
+    // could reach with perfect overlap — the real result lands below it (scheduling, no double copy
+    // engine guaranteed, TRT context overhead).
+    const double convertMs = ms(convertSec);
+    const double uploadMs = ms(uploadSec);
+    const double computeMs = ms(computeSec);
+    const double downloadMs = ms(downloadSec);
+    // (std::max with an initializer list collides with windows.h's max macro; fold by hand.)
+    double bottleneckMs = convertMs;
+    if (uploadMs > bottleneckMs) bottleneckMs = uploadMs;
+    if (computeMs > bottleneckMs) bottleneckMs = computeMs;
+    if (downloadMs > bottleneckMs) bottleneckMs = downloadMs;
+    const char *bottleneck = bottleneckMs == computeMs ? "GPU compute"
+                           : bottleneckMs == convertMs ? "CPU convert"
+                           : bottleneckMs == downloadMs ? "D2H download"
+                                                        : "H2D upload";
+    wprintf(L"\n  Multi-stream ceiling (perfect overlap): bound by %hs at %.3f ms/frame = %.1f fps\n",
+            bottleneck, bottleneckMs, bottleneckMs > 0 ? 1000.0 / bottleneckMs : 0.0);
+    wprintf(L"  (vs current serial pipeline %.1f fps; transfer+convert overlap headroom is the gap.)\n",
+            fps(pipelineSec));
 
     return 0;
 }
