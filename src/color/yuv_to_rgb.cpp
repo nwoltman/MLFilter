@@ -2,11 +2,13 @@
 
 #include "yuv_to_rgb.h"
 
+#include <chrono>
 #include <cstdint>
 #include <malloc.h>
 
 #include <windows.h>
 
+#include <cuda_runtime.h>
 #include <zimg.h>
 
 namespace MLFilter {
@@ -25,20 +27,19 @@ auto AlignedAlloc(size_t bytes) -> void * {
     return _aligned_malloc(RoundUp(bytes, kAlign), kAlign);
 }
 
-auto Align4(int value) -> int {
-    return (value + 3) & ~3;
+// Page-locked (pinned) host allocation for the buffers uploaded to the device. Pinned memory lets
+// cudaMemcpyAsync run as a true async DMA (pageable memory forces a synchronous staging copy), and
+// CUDA returns page-aligned memory, which already satisfies zimg's 64-byte base alignment.
+auto PinnedAlloc(size_t bytes) -> void * {
+    void *p = nullptr;
+    if (cudaHostAlloc(&p, RoundUp(bytes, kAlign), cudaHostAllocDefault) != cudaSuccess) {
+        return nullptr;
+    }
+    return p;
 }
 
-// fp16 bit patterns: clamp a half to [0,1] purely on its 16-bit representation. Non-negative
-// halves are monotonic in their bit pattern, so 0x3C00 (== 1.0) is the upper bound; anything
-// with the sign bit set is negative -> 0. (+inf/+nan, being > 0x3C00, clamp to 1.0.)
-constexpr uint16_t kHalfOne = 0x3C00;
-
-auto ClampHalf(uint16_t h) -> uint16_t {
-    if (h & 0x8000u) {
-        return 0;
-    }
-    return h > kHalfOne ? kHalfOne : h;
+auto Align4(int value) -> int {
+    return (value + 3) & ~3;
 }
 
 struct FormatInfo {
@@ -131,15 +132,19 @@ auto YuvToRgbConverter::Create(const Params &params, std::wstring &error) -> std
     converter->_p0 = AlignedAlloc(converter->_stride0 * params.height);
     converter->_p1 = AlignedAlloc(converter->_strideC * cH);
     converter->_p2 = AlignedAlloc(converter->_strideC * cH);
-    converter->_r = static_cast<unsigned short *>(AlignedAlloc(converter->_strideRgb * params.height));
-    converter->_g = static_cast<unsigned short *>(AlignedAlloc(converter->_strideRgb * params.height));
-    converter->_b = static_cast<unsigned short *>(AlignedAlloc(converter->_strideRgb * params.height));
-    converter->_out = static_cast<unsigned short *>(_aligned_malloc(converter->OutputBytes(), kAlign));
+    converter->_r = static_cast<unsigned short *>(PinnedAlloc(converter->_strideRgb * params.height));
+    converter->_g = static_cast<unsigned short *>(PinnedAlloc(converter->_strideRgb * params.height));
+    converter->_b = static_cast<unsigned short *>(PinnedAlloc(converter->_strideRgb * params.height));
 
-    if (!converter->_p0 || !converter->_p1 || !converter->_p2 || !converter->_r || !converter->_g || !converter->_b || !converter->_out) {
+    if (!converter->_p0 || !converter->_p1 || !converter->_p2 || !converter->_r || !converter->_g || !converter->_b) {
         error = L"Out of memory allocating conversion buffers.";
         return nullptr;
     }
+
+    converter->_result.r = converter->_r;
+    converter->_result.g = converter->_g;
+    converter->_result.b = converter->_b;
+    converter->_result.strideBytes = converter->_strideRgb;
 
     zimg_image_format src;
     zimg_image_format dst;
@@ -215,11 +220,10 @@ YuvToRgbConverter::~YuvToRgbConverter() {
     _aligned_free(_p0);
     _aligned_free(_p1);
     _aligned_free(_p2);
-    _aligned_free(_r);
-    _aligned_free(_g);
-    _aligned_free(_b);
+    cudaFreeHost(_r);
+    cudaFreeHost(_g);
+    cudaFreeHost(_b);
     _aligned_free(_tmp);
-    _aligned_free(_out);
 }
 
 // Unpacks the source frame's layout into the planar buffers zimg consumes. Plane 0 = Y (or R),
@@ -414,27 +418,17 @@ auto YuvToRgbConverter::Deinterleave(const unsigned char *srcBuffer) -> void {
     }
 }
 
-// Clamps zimg's (padded-stride) planar RGB fp16 to [0,1] and repacks it tightly into _out as
-// 3 contiguous planes (R, G, B), stride == width — the engine's NCHW input layout.
-auto YuvToRgbConverter::ClampAndPack() -> void {
-    const size_t plane = static_cast<size_t>(_width) * _height;
-    const unsigned short *srcPlanes[3] = { _r, _g, _b };
+auto YuvToRgbConverter::Convert(const unsigned char *srcBuffer, StageTimings *timings) -> const PlanarRgbFp16 * {
+    // Only consult the clock when a breakdown was requested; the production path passes nullptr.
+    using Clock = std::chrono::steady_clock;
+    const auto now = [&] { return Clock::now(); };
+    const auto elapsed = [](Clock::time_point a, Clock::time_point b) {
+        return std::chrono::duration<double>(b - a).count();
+    };
 
-    for (int p = 0; p < 3; ++p) {
-        unsigned short *dst = _out + static_cast<size_t>(p) * plane;
-        for (int y = 0; y < _height; ++y) {
-            const auto *srcRow = reinterpret_cast<const unsigned short *>(
-                reinterpret_cast<const unsigned char *>(srcPlanes[p]) + static_cast<ptrdiff_t>(y) * _strideRgb);
-            unsigned short *dstRow = dst + static_cast<size_t>(y) * _width;
-            for (int x = 0; x < _width; ++x) {
-                dstRow[x] = ClampHalf(srcRow[x]);
-            }
-        }
-    }
-}
-
-auto YuvToRgbConverter::Convert(const unsigned char *srcBuffer) -> const unsigned short * {
+    const auto t0 = timings ? now() : Clock::time_point{};
     Deinterleave(srcBuffer);
+    const auto t1 = timings ? now() : Clock::time_point{};
 
     zimg_image_buffer_const src = {};
     src.version = ZIMG_API_VERSION;
@@ -463,9 +457,13 @@ auto YuvToRgbConverter::Convert(const unsigned char *srcBuffer) -> const unsigne
     if (zimg_filter_graph_process(_graph, &src, &dst, _tmp, nullptr, nullptr, nullptr, nullptr) != ZIMG_ERROR_SUCCESS) {
         return nullptr;
     }
+    const auto t2 = timings ? now() : Clock::time_point{};
 
-    ClampAndPack();
-    return _out;
+    if (timings) {
+        timings->deinterleaveSec = elapsed(t0, t1);
+        timings->zimgSec = elapsed(t1, t2);
+    }
+    return &_result;
 }
 
 }

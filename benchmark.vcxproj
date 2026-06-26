@@ -38,7 +38,7 @@
     <ClCompile Include="src\color\yuv_to_rgb.cpp" />
     <ClCompile Include="src\engine\inference_session.cpp" />
     <ClCompile Include="src\engine\tensorrt_engine_builder.cpp" />
-    <CudaCompile Include="src\engine\fp16_to_rgb48.cu" />
+    <CudaCompile Include="src\engine\fp16_kernels.cu" />
     <ClCompile Include="src\engine\engine_naming.cpp" />
     <ClCompile Include="src\engine\gpu_info.cpp" />
     <ClCompile Include="src\engine\onnx_fp16.cpp" />
@@ -48,7 +48,7 @@
   <ItemGroup>
     <ClInclude Include="src\color\yuv_to_rgb.h" />
     <ClInclude Include="src\engine\inference_session.h" />
-    <ClInclude Include="src\engine\fp16_to_rgb48.h" />
+    <ClInclude Include="src\engine\fp16_kernels.h" />
     <ClInclude Include="src\engine\engine_builder.h" />
     <ClInclude Include="src\engine\tensorrt_engine_builder.h" />
     <ClInclude Include="src\engine\engine_naming.h" />

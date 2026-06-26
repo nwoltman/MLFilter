@@ -16,8 +16,9 @@ namespace MLFilter {
 //
 // zimg does all of the conversion (subsampling, depth, matrix, range, RGB); this class only
 // unpacks each format's memory layout into the planar buffers zimg consumes. The output is 3
-// contiguous planes (R, then G, then B), each width*height fp16 with stride == width — exactly
-// the NCHW buffer the engine consumes. One converter per pin connection; not thread-safe.
+// planar channels (R, G, B), each width*height fp16, in pinned host memory so the engine can
+// upload them to the device directly. The [0,1] clamp the model input needs is applied on the
+// GPU. One converter per pin connection; not thread-safe.
 class YuvToRgbConverter {
 public:
     enum class Kind {
@@ -53,6 +54,23 @@ public:
         bool bottomUp;   // RGB stored bottom-up (positive biHeight); ignored for YUV
     };
 
+    // Optional per-stage wall-clock breakdown of one Convert() call (seconds). Used by the
+    // benchmark to see where the CPU conversion cost goes; nullptr in the production path.
+    struct StageTimings {
+        double deinterleaveSec = 0;
+        double zimgSec = 0;
+    };
+
+    // A successful Convert() result: three padded-stride planar fp16 channels (R, G, B), each
+    // width*height __half with per-row stride strideBytes, in pinned host memory. NOT yet clamped
+    // to [0,1] — the engine applies that on the GPU. Valid until the next Convert() or destruction.
+    struct PlanarRgbFp16 {
+        const void *r = nullptr;
+        const void *g = nullptr;
+        const void *b = nullptr;
+        ptrdiff_t strideBytes = 0;
+    };
+
     static auto Create(const Params &params, std::wstring &error) -> std::unique_ptr<YuvToRgbConverter>;
 
     ~YuvToRgbConverter();
@@ -61,17 +79,15 @@ public:
     auto operator=(const YuvToRgbConverter &) -> YuvToRgbConverter & = delete;
 
     // Converts one frame. srcBuffer points at the IMediaSample data. Returns a pointer to the
-    // planar RGB fp16 result (size OutputBytes()), valid until the next Convert() or
-    // destruction. Returns nullptr on error.
-    auto Convert(const unsigned char *srcBuffer) -> const unsigned short *;
-
-    auto OutputBytes() const -> size_t { return static_cast<size_t>(3) * _width * _height * sizeof(unsigned short); }
+    // planar RGB fp16 result (owned by the converter), valid until the next Convert() or
+    // destruction. Returns nullptr on error. If `timings` is non-null it receives a per-stage
+    // wall-clock breakdown of this call.
+    auto Convert(const unsigned char *srcBuffer, StageTimings *timings = nullptr) -> const PlanarRgbFp16 *;
 
 private:
     YuvToRgbConverter() = default;
 
     auto Deinterleave(const unsigned char *srcBuffer) -> void;
-    auto ClampAndPack() -> void;
 
     zimg_filter_graph *_graph = nullptr;
 
@@ -91,7 +107,7 @@ private:
     ptrdiff_t _stride0 = 0; // bytes
     ptrdiff_t _strideC = 0; // bytes (planes 1 and 2)
 
-    // Aligned planar RGB fp16 output from zimg (padded stride), then clamped/repacked tightly.
+    // Pinned planar RGB fp16 output from zimg (padded stride); uploaded to the device directly.
     unsigned short *_r = nullptr;
     unsigned short *_g = nullptr;
     unsigned short *_b = nullptr;
@@ -99,7 +115,7 @@ private:
 
     void *_tmp = nullptr; // zimg scratch buffer
 
-    unsigned short *_out = nullptr; // tight NCHW result returned to the caller
+    PlanarRgbFp16 _result; // pointers/stride into _r/_g/_b, returned to the caller
 };
 
 }

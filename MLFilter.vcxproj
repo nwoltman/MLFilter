@@ -52,13 +52,13 @@
     <ClInclude Include="src\settings.h" />
     <ClInclude Include="src\engine\engine_builder.h" />
     <ClInclude Include="src\engine\engine_naming.h" />
-    <ClInclude Include="src\engine\fp16_to_rgb48.h" />
+    <ClInclude Include="src\engine\fp16_kernels.h" />
     <ClInclude Include="src\engine\gpu_info.h" />
     <ClInclude Include="src\engine\onnx_fp16.h" />
     <ClInclude Include="src\engine\tensorrt_engine_builder.h" />
   </ItemGroup>
   <ItemGroup>
-    <CudaCompile Include="src\engine\fp16_to_rgb48.cu" />
+    <CudaCompile Include="src\engine\fp16_kernels.cu" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\filter.cpp" />

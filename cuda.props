@@ -1,6 +1,6 @@
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <!--
-    CUDA build customization for the fp16 -> RGB48 conversion kernel (src\engine\fp16_to_rgb48.cu).
+    CUDA build customization for the inference pipeline's fp16 kernels (src\engine\fp16_kernels.cu).
 
     Imported in the project's "ExtensionSettings" ImportGroup (cuda.targets is the matching
     "ExtensionTargets" import). Pulls in the CUDA Toolkit's MSBuild integration straight from

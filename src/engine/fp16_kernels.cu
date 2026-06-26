@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-#include "fp16_to_rgb48.h"
+#include "fp16_kernels.h"
 
 #include <cstdint>
 
@@ -49,6 +49,33 @@ auto LaunchFp16PlanarToRgb48(const void *dPlanarFp16, void *dPackedRgb48, int wi
     const dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
     Fp16PlanarToRgb48Kernel<<<grid, block, 0, stream>>>(r, g, b, static_cast<uint16_t *>(dPackedRgb48),
                                                         width, height);
+    return cudaGetLastError();
+}
+
+namespace {
+
+// Clamps one fp16 to [0,1] on its raw 16-bit pattern: non-negative halves are monotonic in their
+// bit pattern, so 0x3C00 (==1.0) is the upper bound and any sign-bit-set value is negative -> 0.
+// (+inf/+nan, being > 0x3C00, clamp to 1.0.)
+__global__ void ClampHalf01Kernel(uint16_t *data, size_t count) {
+    const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (i >= count) {
+        return;
+    }
+    const uint16_t h = data[i];
+    if (h & 0x8000u) {
+        data[i] = 0;
+    } else if (h > 0x3C00u) {
+        data[i] = 0x3C00u;
+    }
+}
+
+}
+
+auto LaunchClampHalf01(void *dData, size_t count, cudaStream_t stream) -> cudaError_t {
+    const int block = 256;
+    const size_t grid = (count + block - 1) / block;
+    ClampHalf01Kernel<<<static_cast<unsigned>(grid), block, 0, stream>>>(static_cast<uint16_t *>(dData), count);
     return cudaGetLastError();
 }
 

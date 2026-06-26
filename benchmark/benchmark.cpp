@@ -334,8 +334,10 @@ auto wmain(int argc, wchar_t **argv) -> int {
         return 1;
     }
 
-    // Per-stage accumulators (timed frames only).
+    // Per-stage accumulators (timed frames only). The convert stage is broken down further into
+    // its CPU sub-passes (deinterleave -> zimg) so the cost is visible.
     double convertSec = 0, inferSec = 0;
+    double deinterleaveSec = 0, zimgSec = 0;
     int warmedUp = 0;
     int timed = 0;
     Clock::time_point timedStart;
@@ -355,13 +357,15 @@ auto wmain(int argc, wchar_t **argv) -> int {
         }
 
         const auto t0 = Clock::now();
-        const unsigned short *rgb = converter->Convert(frame.data());
+        YuvToRgbConverter::StageTimings stage;
+        const YuvToRgbConverter::PlanarRgbFp16 *rgb = converter->Convert(frame.data(), timing ? &stage : nullptr);
         if (rgb == nullptr) {
             wprintf(L"Conversion failed.\n");
             return 1;
         }
         const auto t1 = Clock::now();
-        if (!session->Upload(rgb) || !session->Infer() || !session->Download(packed.data(), packedStride)) {
+        if (!session->Upload(rgb->r, rgb->g, rgb->b, static_cast<size_t>(rgb->strideBytes)) ||
+            !session->Infer() || !session->Download(packed.data(), packedStride)) {
             wprintf(L"Inference failed.\n");
             return 1;
         }
@@ -370,6 +374,8 @@ auto wmain(int argc, wchar_t **argv) -> int {
         if (timing) {
             convertSec += std::chrono::duration<double>(t1 - t0).count();
             inferSec += std::chrono::duration<double>(t2 - t1).count();
+            deinterleaveSec += stage.deinterleaveSec;
+            zimgSec += stage.zimgSec;
             ++timed;
         } else {
             ++warmedUp;
@@ -390,7 +396,9 @@ auto wmain(int argc, wchar_t **argv) -> int {
     wprintf(L"\n======================== Results (%d frames) ========================\n", timed);
     wprintf(L"  Stage          avg/frame       total      throughput    share\n");
     wprintf(L"  YUV->RGB       %8.3f ms   %8.3f s   %8.1f fps   %5.1f%%\n", ms(convertSec), convertSec, fps(convertSec), pct(convertSec));
-    wprintf(L"  Inference      %8.3f ms   %8.3f s   %8.1f fps   %5.1f%%   <-- TensorRT (upload+infer+RGB48 convert+download)\n", ms(inferSec), inferSec, fps(inferSec), pct(inferSec));
+    wprintf(L"    deinterleave %8.3f ms   %8.3f s   %8.1f fps   %5.1f%%   (CPU unpack to planar)\n", ms(deinterleaveSec), deinterleaveSec, fps(deinterleaveSec), pct(deinterleaveSec));
+    wprintf(L"    zimg         %8.3f ms   %8.3f s   %8.1f fps   %5.1f%%   (CPU upsample+matrix+fp16)\n", ms(zimgSec), zimgSec, fps(zimgSec), pct(zimgSec));
+    wprintf(L"  Inference      %8.3f ms   %8.3f s   %8.1f fps   %5.1f%%   <-- TensorRT (upload+clamp+infer+RGB48 convert+download)\n", ms(inferSec), inferSec, fps(inferSec), pct(inferSec));
     wprintf(L"  --------------------------------------------------------------------\n");
     wprintf(L"  Pipeline       %8.3f ms   %8.3f s   %8.1f fps   %5.1f%%   (sum of stages, serial)\n", ms(pipelineSec), pipelineSec, fps(pipelineSec), pct(pipelineSec));
     wprintf(L"  End-to-end     %8.3f ms   %8.3f s   %8.1f fps             (incl. ffmpeg decode wait)\n", ms(wallSec), wallSec, fps(wallSec));

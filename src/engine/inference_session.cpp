@@ -9,7 +9,7 @@
 #include <cuda_runtime.h>
 #include <NvInfer.h>
 
-#include "fp16_to_rgb48.h"
+#include "fp16_kernels.h"
 
 namespace MLFilter {
 
@@ -142,8 +142,22 @@ InferenceSession::~InferenceSession() {
     delete _runtime;
 }
 
-auto InferenceSession::Upload(const void *hostInput) -> bool {
-    return cudaMemcpyAsync(_dInput, hostInput, InputBytes(), cudaMemcpyHostToDevice, _stream) == cudaSuccess;
+auto InferenceSession::Upload(const void *r, const void *g, const void *b, size_t srcStrideBytes) -> bool {
+    // Copy each padded-stride planar channel into its (tightly packed) slot of the NCHW input
+    // buffer; cudaMemcpy2DAsync drops the source row padding. From pinned memory these run as
+    // async DMAs that overlap the rest of the stream.
+    const size_t rowBytes = static_cast<size_t>(_inW) * sizeof(unsigned short);
+    const size_t planeBytes = rowBytes * _inH;
+    auto *dst = static_cast<unsigned char *>(_dInput);
+    const void *planes[3] = { r, g, b };
+    for (int p = 0; p < 3; ++p) {
+        if (cudaMemcpy2DAsync(dst + static_cast<size_t>(p) * planeBytes, rowBytes, planes[p], srcStrideBytes,
+                              rowBytes, _inH, cudaMemcpyHostToDevice, _stream) != cudaSuccess) {
+            return false;
+        }
+    }
+    // Apply the [0,1] model-input clamp on the device, so the planar fp16 can be uploaded unclamped.
+    return LaunchClampHalf01(_dInput, static_cast<size_t>(3) * _inW * _inH, _stream) == cudaSuccess;
 }
 
 auto InferenceSession::Infer() -> bool {

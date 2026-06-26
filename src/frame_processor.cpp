@@ -49,12 +49,12 @@ auto FrameProcessor::Process(IMediaSample *in, IMediaSample *out) -> HRESULT {
         return E_FAIL;
     }
 
-    const unsigned short *rgb = _converter->Convert(srcBuffer);
+    const YuvToRgbConverter::PlanarRgbFp16 *rgb = _converter->Convert(srcBuffer);
     if (rgb == nullptr) {
         return E_FAIL;
     }
 
-    if (!_session->Upload(rgb) || !_session->Infer()) {
+    if (!_session->Upload(rgb->r, rgb->g, rgb->b, static_cast<size_t>(rgb->strideBytes)) || !_session->Infer()) {
         return E_FAIL;
     }
 

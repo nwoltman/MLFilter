@@ -46,9 +46,11 @@ public:
     auto InputBytes() const -> size_t { return static_cast<size_t>(3) * _inW * _inH * sizeof(unsigned short); }
     auto OutputBytes() const -> size_t { return static_cast<size_t>(3) * _outW * _outH * sizeof(unsigned short); }
 
-    // host -> device input (host buffer is planar RGB fp16 of InputBytes()). Returns false on a
-    // CUDA error.
-    auto Upload(const void *hostInput) -> bool;
+    // host -> device input. The three planar RGB fp16 channels (r, g, b) — each
+    // InputWidth()*InputHeight() __half with per-row stride srcStrideBytes (may be padded) — are
+    // copied into the engine's tight NCHW input buffer and clamped to [0,1] on the device. The
+    // source buffers should be pinned for an async DMA. Returns false on a CUDA error.
+    auto Upload(const void *r, const void *g, const void *b, size_t srcStrideBytes) -> bool;
 
     // Runs the network and, on the same stream, the fp16-planar -> packed-RGB48 conversion kernel.
     // Returns false on a CUDA/TensorRT error.
