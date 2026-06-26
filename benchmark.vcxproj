@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{2B7E4C19-9F3A-4D6E-A1C2-7F0B5E8D3A14}</ProjectGuid>
+    <RootNamespace>MLFilterBenchmark</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+  </PropertyGroup>
+  <Import Project="$(SolutionDir)common.props" />
+  <Import Project="$(SolutionDir)tensorrt.props" />
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(SolutionDir)deps\zimg\src\zimg\api;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <!-- Console app: the benchmark prints to stdout. -->
+      <SubSystem>Console</SubSystem>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="benchmark\benchmark.cpp" />
+    <ClCompile Include="src\color\yuv_to_rgb.cpp" />
+    <ClCompile Include="src\engine\inference_session.cpp" />
+    <ClCompile Include="src\engine\tensorrt_engine_builder.cpp" />
+    <ClCompile Include="src\engine\engine_naming.cpp" />
+    <ClCompile Include="src\engine\gpu_info.cpp" />
+    <ClCompile Include="src\engine\onnx_fp16.cpp" />
+    <ClCompile Include="src\settings.cpp" />
+    <ClCompile Include="src\registry.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\color\yuv_to_rgb.h" />
+    <ClInclude Include="src\engine\inference_session.h" />
+    <ClInclude Include="src\engine\engine_builder.h" />
+    <ClInclude Include="src\engine\tensorrt_engine_builder.h" />
+    <ClInclude Include="src\engine\engine_naming.h" />
+    <ClInclude Include="src\engine\gpu_info.h" />
+    <ClInclude Include="src\engine\onnx_fp16.h" />
+    <ClInclude Include="src\settings.h" />
+    <ClInclude Include="src\registry.h" />
+    <ClInclude Include="src\constants.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="deps\zimg\_msvc\zimg\zimg.vcxproj">
+      <Project>{C8629E57-4D6F-40FA-82FC-B39824195932}</Project>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>
