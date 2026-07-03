@@ -2,55 +2,49 @@
 
 A DirectShow filter for processing video frames with machine-learning models on the GPU.
 
-MLFilter is a DirectShow transform filter for media players such as MPC-BE. It is being
-built to upscale video frames with an ONNX model on the GPU. The current phase implements:
+Supports FP16 and FP32 ONNX models.
 
-- A pass-through filter (`MLFilter_x64.ax`) that delivers frames downstream unmodified.
-- A configuration property page where you select an ONNX model and, optionally, a list of
-  filename wildcard patterns (one per line, e.g. `*.mkv`). When patterns are set, the filter
-  only processes files whose path matches one of them; for non-matching files it bypasses the
-  connection and removes itself from the graph. Leave the list blank to process every file.
-- On-demand engine building: when a file is played, the filter reads the video's actual
-  resolution as the graph connects and builds the matching static, fp16 TensorRT engine (via
-  the native TensorRT C++ API) before playback starts, showing a progress window while it
-  works. A 1920×1080 engine is pre-built when you select a model so the most common case never
-  waits. fp32 models are automatically converted to fp16 first (TensorRT 11 engines are
-  strongly typed, so precision follows the model).
+The filter is mainly intended to be used to upscale video with models like the
+[Anime JaNai HD V3 models](https://github.com/the-database/mpv-AnimeJaNai/releases/tag/3.0.0)
+(join the [JaNai Discord server](https://discord.gg/EeFfZUBvxj) to get their latest models).
 
-GPU inference inside the filter (running the engine, producing RGB48 output) and a DirectML
-backend for AMD GPUs are planned for later phases. The engine-builder backend is abstracted
-behind an `IEngineBuilder` interface so additional backends can be added.
+## How To Use
 
-Built engines are written to `%LOCALAPPDATA%\MLFilter\Engines\`. Each engine filename encodes
-the model, resolution, GPU name, driver version, and TensorRT version. When you rebuild after a
-driver, GPU, or TensorRT change, the engines for the old configuration are deleted automatically.
+- Download the latest [release](https://github.com/nwoltman/MLFilter/releases) and unzip the contents to your desired location
+- Run the `Install.bat` script as an administrator (right-click it to find this option)
+  - Do not move the folder after installing the filter. If you want to move it, uninstall the filter
+    first, then move the folder, then re-install it.
+- Open your video player software and add `MLFilter` as an external filter
+- Set the filter to `Prefer` (or use `Merit` if you have other, similar filters and need them to run in a specific order)
+- Double-click the filter to open the filter configuration. Select an ONNX model to use with the filter.
 
 ## System requirements
 
 You need:
 
-- **An NVIDIA graphics card, GeForce RTX 20-series / GTX 16-series or newer.** That includes the
-  RTX 30, 40, and 50 series. Older NVIDIA cards (GTX 10-series and earlier) won't work, and neither
-  will AMD or Intel graphics for now.
-- **An up-to-date NVIDIA driver** (version 580 or newer). If you have any trouble, the first thing
-  to try is updating your driver from NVIDIA's website or GeForce Experience.
-- **64-bit Windows.**
-- **A media player that supports external DirectShow filters**, such as MPC-BE.
+- **An NVIDIA graphics card, GeForce RTX 20-series / GTX 16-series or newer**
+  - AMD GPUs are planned to be supported in the future
+- **An up-to-date NVIDIA driver** (version 610.62 or newer). If you have any trouble, the first
+  thing to try is updating your driver from NVIDIA's website or the NVIDIA App.
+- **A 64-bit media player that supports external DirectShow filters**, such as MPC-BE/HC
 
-Everything else the filter needs is included in the download.
+### For NVIDIA Users
 
-The first time you play a video at a new resolution, the filter spends a few moments preparing
-itself for your card before playback starts. This happens once per resolution; after that, videos
-of that size start right away.
+The first time you play a video at a new resolution, the filter spends a few moments building the
+inference engine for your model and card before playback starts. This happens once per resolution;
+after that, videos of that size start right away. This process will repeat each time you upgrade
+your GPU driver or when this filter is updated with newer versions of NVIDIA's TensorRT software.
+
+Built engines are written to `%LOCALAPPDATA%\MLFilter\Engines\`. When a new engine is built, the
+previous one automatically gets deleted. You can also manually delete all built engines use the
+"Delete all engine files" button in the filter configuration GUI.
 
 ## Development setup
 
-This repository uses git submodules (the [zimg](https://github.com/sekrit-twc/zimg) color
-conversion library, which itself pulls in graphengine). Clone with submodules, or initialize
-them in an existing clone, or the build won't find `zimg.h`:
+This repository uses git submodules. Clone with submodules, or initialize them in an existing clone.
 
-```
-git clone --recurse-submodules <url>
+```batch
+git clone --recurse-submodules https://github.com/nwoltman/MLFilter.git
 ```
 
 The engine-building backend uses NVIDIA TensorRT and the CUDA Toolkit. Install them with the
@@ -67,7 +61,7 @@ zip-package approach below before building.
 
 3. **Set `TENSORRT_ROOT`.** Add a user or system environment variable pointing at that folder:
 
-   ```
+   ```batch
    setx TENSORRT_ROOT "C:\SDKs\TensorRT-11.x.x.x"
    ```
 
@@ -85,7 +79,7 @@ zip-package approach below before building.
    install and uncheck everything except the first "CUDA" checkbox and its children. The installer
    sets the `CUDA_PATH` environment variable.
 
-### Visual Studio project setup
+### Visual Studio Project
 
 The build reads `$(TENSORRT_ROOT)` and `$(CUDA_PATH)` (see `tensorrt.props`):
 
@@ -101,21 +95,20 @@ If you install a different TensorRT major version, update the `TensorRtLibSuffix
 Open `MLFilter.sln` in Visual Studio and build the `Release|x64` configuration, or use the
 helper script (it locates MSBuild via vswhere, so no Developer prompt is needed):
 
-```
+```batch
 .\make_dev.ps1                       # builds Release|x64
 .\make_dev.ps1 -Configuration Debug  # Debug build
 .\make_dev.ps1 -Rebuild              # clean rebuild
 ```
 
-The output is `x64\Release\MLFilter_x64.ax`. (You can also run
-`msbuild MLFilter.sln /p:Configuration=Release /p:Platform=x64` directly.)
+The output is `x64\Release\MLFilter_x64.ax`.
 
 ## Registering the filter
 
 For local testing, register the built `.ax` with `install_dev.bat` (it self-elevates and
 defaults to the Release build):
 
-```
+```batch
 install_dev.bat            # registers x64\Release\MLFilter_x64.ax
 install_dev.bat Debug      # registers the Debug build
 ```
@@ -130,8 +123,8 @@ open its properties to configure the model and file patterns.
 `make_release.ps1` packages a self-contained release for machines that do **not** have the
 TensorRT/CUDA SDKs installed:
 
-```
-.\make_release.ps1     # builds release\ (~1.5 GB)
+```batch
+.\make_release.ps1     # builds release\
 ```
 
 It takes no parameters — the build is always the same. Build the `Release|x64` configuration
@@ -144,8 +137,7 @@ nvJitLink, …).
 To keep the size reasonable, it bundles TensorRT builder-resource DLLs only for consumer GPU
 architectures — `sm75` (Turing, RTX 20xx/GTX 16xx), `sm86` (Ampere, RTX 30xx), `sm89` (Ada, RTX
 40xx), `sm120` (Blackwell, RTX 50xx), plus `ptx` (a JIT fallback that lets other architectures
-still build). Datacenter architectures (sm80/sm90/sm100), cuBLAS (TensorRT 10+ keeps its cuBLAS
-tactics off by default), and the unused `lean`/`dispatch`/`vc_plugin` runtimes are excluded.
+still build).
 
 ```
 release\
@@ -157,5 +149,4 @@ release\
 
 The TensorRT DLLs are delay-loaded and `DllMain` prepends this `bin\` folder to the process
 search path, so the filter finds its bundled dependencies even though they live in a
-subfolder. Registration records the `.ax`'s location, so keep the folder in place (or re-run
-`install.bat` after moving it). `release\` is git-ignored.
+subfolder.
