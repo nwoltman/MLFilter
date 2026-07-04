@@ -27,7 +27,6 @@ public:
                        YuvToRgbConverter::Kind kind,
                        bool bt709,
                        bool fullRange,
-                       bool bottomUp,
                        std::wstring &error) -> std::unique_ptr<FrameProcessor>;
 
     ~FrameProcessor();

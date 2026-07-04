@@ -13,7 +13,6 @@ auto FrameProcessor::Create(const std::filesystem::path &enginePath,
                             YuvToRgbConverter::Kind kind,
                             bool bt709,
                             bool fullRange,
-                            bool bottomUp,
                             std::wstring &error) -> std::unique_ptr<FrameProcessor> {
     auto processor = std::unique_ptr<FrameProcessor>(new FrameProcessor());
 
@@ -28,7 +27,6 @@ auto FrameProcessor::Create(const std::filesystem::path &enginePath,
         .height = processor->_session->InputHeight(),
         .bt709 = bt709,
         .fullRange = fullRange,
-        .bottomUp = bottomUp,
     };
     processor->_converter = YuvToRgbConverter::Create(params, error);
     if (!processor->_converter) {

@@ -26,6 +26,29 @@ namespace MLFilter {
 
 namespace {
 
+auto DescribeVideoSubtype(const GUID &subtype) -> std::wstring {
+    if (subtype == FOURCCMap(subtype.Data1)) {
+        const wchar_t fourcc[] = {
+            static_cast<wchar_t>((subtype.Data1 >> 0) & 0xFF),
+            static_cast<wchar_t>((subtype.Data1 >> 8) & 0xFF),
+            static_cast<wchar_t>((subtype.Data1 >> 16) & 0xFF),
+            static_cast<wchar_t>((subtype.Data1 >> 24) & 0xFF),
+            L'\0',
+        };
+        bool printable = true;
+        for (int i = 0; i < 4; ++i) {
+            printable = printable && fourcc[i] >= 0x20 && fourcc[i] <= 0x7E;
+        }
+        if (printable) {
+            return std::wstring(L"'") + fourcc + L"'";
+        }
+    }
+
+    wchar_t guid[64] = {};
+    StringFromGUID2(subtype, guid, static_cast<int>(std::size(guid)));
+    return guid;
+}
+
 auto Trim(std::wstring_view text) -> std::wstring {
     const auto isWs = [](wchar_t c) { return c == L' ' || c == L'\t' || c == L'\r' || c == L'\n'; };
     size_t begin = 0;
@@ -94,41 +117,19 @@ auto GetVideoResolution(const CMediaType &mt, int &width, int &height) -> bool {
     return false;
 }
 
-// Maps a supported input subtype to the converter's format kind. Returns false for subtypes
-// the converter can't unpack (the filter then falls back to pass-through).
+// Maps an internally supported input subtype to the converter's format kind.
 auto KindForSubtype(const GUID &s, YuvToRgbConverter::Kind &kind) -> bool {
     using K = YuvToRgbConverter::Kind;
     if (s == FOURCCMap(Fourcc('N', 'V', '1', '2'))) { kind = K::NV12; }
-    else if (s == FOURCCMap(Fourcc('Y', 'V', '1', '2'))) { kind = K::YV12; }
     else if (s == FOURCCMap(Fourcc('P', '0', '1', '0'))) { kind = K::P010; }
-    else if (s == FOURCCMap(Fourcc('P', '0', '1', '6'))) { kind = K::P016; }
-    else if (s == FOURCCMap(Fourcc('Y', 'U', 'Y', '2'))) { kind = K::YUY2; }
-    else if (s == FOURCCMap(Fourcc('U', 'Y', 'V', 'Y'))) { kind = K::UYVY; }
-    else if (s == FOURCCMap(Fourcc('P', '2', '1', '0'))) { kind = K::P210; }
-    else if (s == FOURCCMap(Fourcc('P', '2', '1', '6'))) { kind = K::P216; }
-    else if (s == FOURCCMap(Fourcc('v', '2', '1', '0'))) { kind = K::V210; }
-    else if (s == FOURCCMap(Fourcc('Y', 'V', '2', '4'))) { kind = K::YV24; }
-    else if (s == FOURCCMap(Fourcc('A', 'Y', 'U', 'V'))) { kind = K::AYUV; }
-    else if (s == FOURCCMap(Fourcc('Y', '4', '1', '0'))) { kind = K::Y410; }
-    else if (s == FOURCCMap(Fourcc('v', '4', '1', '0'))) { kind = K::V410; }
-    else if (s == FOURCCMap(Fourcc('Y', '4', '1', '6'))) { kind = K::Y416; }
-    else if (s == MEDIASUBTYPE_RGB24) { kind = K::RGB24; }
-    else if (s == MEDIASUBTYPE_RGB32) { kind = K::RGB32; }
-    else if (s == FOURCCMap(Fourcc('R', 'G', 'B', '0'))) { kind = K::RGB48; }
     else { return false; }
     return true;
 }
 
-auto IsRgbKind(YuvToRgbConverter::Kind kind) -> bool {
-    using K = YuvToRgbConverter::Kind;
-    return kind == K::RGB24 || kind == K::RGB32 || kind == K::RGB48;
-}
-
-// Resolves the conversion's matrix and range from the input media type's color info, mirroring
-// the reference python: range defaults to limited (full for RGB); an unspecified matrix
-// defaults by height (BT.601 below 720p, otherwise BT.709).
-auto ResolveColorInfo(const CMediaType &mt, int height, bool isRgb, bool &bt709, bool &fullRange) -> void {
-    fullRange = isRgb; // RGB is full-range by default; YUV limited
+// Resolves the conversion's matrix and range from the input media type's color info. Range defaults
+// to limited; an unspecified matrix defaults by height (BT.601 below 720p, otherwise BT.709).
+auto ResolveColorInfo(const CMediaType &mt, int height, bool &bt709, bool &fullRange) -> void {
+    fullRange = false;
     bool matrixKnown = false;
 
     if (mt.formattype == FORMAT_VideoInfo2 && mt.cbFormat >= sizeof(VIDEOINFOHEADER2)) {
@@ -183,8 +184,7 @@ auto STDMETHODCALLTYPE CMLFilter::NonDelegatingQueryInterface(REFIID riid, void 
 auto CMLFilter::CheckInputType(const CMediaType *mtIn) -> HRESULT {
     CheckPointer(mtIn, E_POINTER);
 
-    if (*mtIn->Type() != MEDIATYPE_Video || !IsSupportedInputSubtype(*mtIn->Subtype())) {
-        // Reject compressed/unknown types so we connect after the decoder, not before it.
+    if (*mtIn->Type() != MEDIATYPE_Video) {
         return VFW_E_TYPE_NOT_ACCEPTED;
     }
 
@@ -202,8 +202,26 @@ auto CMLFilter::CheckTransform(const CMediaType *mtIn, const CMediaType *mtOut) 
     CheckPointer(mtIn, E_POINTER);
     CheckPointer(mtOut, E_POINTER);
 
-    if (*mtIn->Type() != MEDIATYPE_Video || !IsSupportedInputSubtype(*mtIn->Subtype())) {
+    if (*mtIn->Type() != MEDIATYPE_Video) {
         return VFW_E_TYPE_NOT_ACCEPTED;
+    }
+
+    if (!_inputFormatSupported) {
+        // Negotiate a renderer-friendly placeholder output so downstream rejection does not make
+        // the graph builder ask the decoder for a different input subtype. Streaming will fail
+        // before MLFilter produces a frame.
+        if (*mtOut->Subtype() != OutputSubtype()) {
+            return VFW_E_TYPE_NOT_ACCEPTED;
+        }
+        int inW = 0;
+        int inH = 0;
+        int outW = 0;
+        int outH = 0;
+        return GetVideoResolution(*mtIn, inW, inH) &&
+                       GetVideoResolution(*mtOut, outW, outH) &&
+                       inW == outW && inH == outH
+                   ? S_OK
+                   : VFW_E_TYPE_NOT_ACCEPTED;
     }
 
     if (_processor == nullptr) {
@@ -238,14 +256,20 @@ auto CMLFilter::GetMediaType(int iPosition, CMediaType *pMediaType) -> HRESULT {
 
     const CMediaType &inMt = m_pInput->CurrentMediaType();
 
-    if (_processor == nullptr) {
+    if (_processor == nullptr && _inputFormatSupported) {
         // Pass-through: offer the input type unchanged.
         *pMediaType = inMt;
         return S_OK;
     }
 
-    const int outW = _processor->OutputWidth();
-    const int outH = _processor->OutputHeight();
+    int outW = 0;
+    int outH = 0;
+    if (_processor != nullptr) {
+        outW = _processor->OutputWidth();
+        outH = _processor->OutputHeight();
+    } else if (!GetVideoResolution(inMt, outW, outH)) {
+        return VFW_E_TYPE_NOT_ACCEPTED;
+    }
     const DWORD imageSize = static_cast<DWORD>(Rgb48Stride(outW)) * outH;
 
     // Inherit timing / aspect ratio / color metadata from the input where available.
@@ -363,6 +387,22 @@ auto CMLFilter::Transform(IMediaSample *pIn, IMediaSample *pOut) -> HRESULT {
     CheckPointer(pIn, E_POINTER);
     CheckPointer(pOut, E_POINTER);
 
+    if (!_inputFormatSupported) {
+        if (!_inputFormatErrorReported) {
+            _inputFormatErrorReported = true;
+            const std::wstring message =
+                L"MLFilter cannot process this video's decoded pixel format: " +
+                _inputFormatDescription +
+                L"\n\nSupported input formats are NV12 and P010.\n\n"
+                L"If you need support for this format, create an issue report at:\n"
+                L"https://github.com/nwoltman/MLFilter/issues";
+            MessageBoxW(nullptr, message.c_str(), L"MLFilter - Unsupported Video Format",
+                        MB_OK | MB_ICONERROR | MB_TOPMOST | MB_SETFOREGROUND | MB_TASKMODAL);
+            NotifyEvent(EC_ERRORABORT, VFW_E_TYPE_NOT_ACCEPTED, 0);
+        }
+        return VFW_E_TYPE_NOT_ACCEPTED;
+    }
+
     // Carry timestamps and flags through to the output sample.
     REFERENCE_TIME tStart = 0;
     REFERENCE_TIME tEnd = 0;
@@ -406,6 +446,14 @@ auto CMLFilter::CompleteConnect(PIN_DIRECTION direction, IPin *pReceivePin) -> H
     // The input's media type (and thus the real video resolution) is known once the upstream
     // pin connects, before the output pin negotiates and before playback starts.
     if (direction == PINDIR_INPUT) {
+        const GUID &subtype = *m_pInput->CurrentMediaType().Subtype();
+        _inputFormatSupported = IsSupportedInputSubtype(subtype);
+        _inputFormatErrorReported = false;
+        _inputFormatDescription = DescribeVideoSubtype(subtype);
+        if (!_inputFormatSupported) {
+            _processor.reset();
+            return S_OK;
+        }
         EnsureEngineForInput();
         SetupProcessor();
     }
@@ -416,6 +464,9 @@ auto CMLFilter::CompleteConnect(PIN_DIRECTION direction, IPin *pReceivePin) -> H
 auto CMLFilter::BreakConnect(PIN_DIRECTION direction) -> HRESULT {
     if (direction == PINDIR_INPUT) {
         _processor.reset();
+        _inputFormatSupported = true;
+        _inputFormatErrorReported = false;
+        _inputFormatDescription.clear();
     }
     return CTransformFilter::BreakConnect(direction);
 }
@@ -485,26 +536,12 @@ auto CMLFilter::SetupProcessor() -> void {
     if (!KindForSubtype(*mt.Subtype(), kind)) {
         return; // unsupported subtype -> pass-through
     }
-    const bool isRgb = IsRgbKind(kind);
-
     bool bt709 = false;
     bool fullRange = false;
-    ResolveColorInfo(mt, height, isRgb, bt709, fullRange);
-
-    // RGB DIBs are stored bottom-up when biHeight is positive.
-    bool bottomUp = false;
-    if (isRgb) {
-        int signedHeight = 0;
-        if (mt.formattype == FORMAT_VideoInfo2 && mt.cbFormat >= sizeof(VIDEOINFOHEADER2)) {
-            signedHeight = reinterpret_cast<const VIDEOINFOHEADER2 *>(mt.pbFormat)->bmiHeader.biHeight;
-        } else if (mt.formattype == FORMAT_VideoInfo && mt.cbFormat >= sizeof(VIDEOINFOHEADER)) {
-            signedHeight = reinterpret_cast<const VIDEOINFOHEADER *>(mt.pbFormat)->bmiHeader.biHeight;
-        }
-        bottomUp = signedHeight > 0;
-    }
+    ResolveColorInfo(mt, height, bt709, fullRange);
 
     std::wstring error;
-    _processor = FrameProcessor::Create(builder.EnginePath(request), kind, bt709, fullRange, bottomUp, error);
+    _processor = FrameProcessor::Create(builder.EnginePath(request), kind, bt709, fullRange, error);
     // On failure _processor stays null and the filter passes frames through unchanged.
 }
 

@@ -12,7 +12,7 @@
 
 namespace MLFilter {
 
-// Copy transform: decodes a 4:2:0 YUV input frame to RGB, runs the TensorRT engine, and
+// Copy transform: converts a supported 4:2:0 YUV input frame to RGB, runs the TensorRT engine, and
 // emits RGB48 downstream (a different pixel format and possibly a larger resolution than the
 // input, which is why this is a copy transform rather than transform-in-place). When no model
 // is configured (or the engine can't be loaded) it degrades to a copy pass-through.
@@ -60,6 +60,9 @@ private:
 
     std::unique_ptr<FrameProcessor> _processor;
     std::atomic<bool> _removalScheduled = false;
+    bool _inputFormatSupported = true;
+    bool _inputFormatErrorReported = false;
+    std::wstring _inputFormatDescription;
 };
 
 }

@@ -21,7 +21,7 @@ namespace MLFilter {
 
 namespace {
 
-// Media types are filled in at registration time from SupportedInputSubtypes()/OutputSubtype().
+// Media types are filled in at registration time.
 REGFILTERPINS REG_PINS[] {
     {
         .strName = nullptr,
@@ -55,26 +55,19 @@ AMOVIESETUP_FILTER REG_FILTER {
     .lpPin = REG_PINS,
 };
 
-// Registers/unregisters the filter. On register, the input pin advertises the decoded
-// subtypes we accept and the output pin advertises RGB48.
+// Registers/unregisters the filter. The wildcard input subtype prevents an upstream decoder
+// from converting its native output merely to satisfy MLFilter's registration metadata.
+// MLFilter reports an error while streaming if the connected subtype is not internally supported.
 auto RegisterFilter(BOOL doRegister) -> HRESULT {
     if (!doRegister) {
         return AMovieDllRegisterServer2(FALSE);
     }
 
-    // Held in statics so the pointers remain valid for the duration of registration.
-    // clsMinorType points at the stable GUIDs owned by formats.cpp.
-    const std::vector<GUID> &inputSubtypes = SupportedInputSubtypes();
-    static std::vector<REGPINTYPES> inputTypes;
-    inputTypes.clear();
-    inputTypes.reserve(inputSubtypes.size());
-    for (const GUID &subtype : inputSubtypes) {
-        inputTypes.push_back(REGPINTYPES { .clsMajorType = &MEDIATYPE_Video, .clsMinorType = &subtype });
-    }
+    static const REGPINTYPES inputType { .clsMajorType = &MEDIATYPE_Video, .clsMinorType = &GUID_NULL };
     static const REGPINTYPES outputType { .clsMajorType = &MEDIATYPE_Video, .clsMinorType = &OutputSubtype() };
 
-    REG_PINS[0].nMediaTypes = static_cast<UINT>(inputTypes.size());
-    REG_PINS[0].lpMediaType = inputTypes.data();
+    REG_PINS[0].nMediaTypes = 1;
+    REG_PINS[0].lpMediaType = &inputType;
     REG_PINS[1].nMediaTypes = 1;
     REG_PINS[1].lpMediaType = &outputType;
 

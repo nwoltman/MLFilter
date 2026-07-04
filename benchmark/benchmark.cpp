@@ -302,7 +302,6 @@ auto wmain(int argc, wchar_t **argv) -> int {
         .height = session->InputHeight(),
         .bt709 = video.bt709,
         .fullRange = video.fullRange,
-        .bottomUp = false,
     };
     auto converter = YuvToRgbConverter::Create(params, error);
     if (!converter) {

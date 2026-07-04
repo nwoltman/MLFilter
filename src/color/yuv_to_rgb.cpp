@@ -38,39 +38,19 @@ auto PinnedAlloc(size_t bytes) -> void * {
     return p;
 }
 
-auto Align4(int value) -> int {
-    return (value + 3) & ~3;
-}
-
 struct FormatInfo {
     int subsampleW; // log2
     int subsampleH; // log2
     int depth;      // bits per component (8, 10, 16)
-    bool rgb;
 };
 
 auto InfoFor(YuvToRgbConverter::Kind kind) -> FormatInfo {
     using K = YuvToRgbConverter::Kind;
     switch (kind) {
-    case K::NV12: return { 1, 1, 8, false };
-    case K::YV12: return { 1, 1, 8, false };
-    case K::P010: return { 1, 1, 10, false };
-    case K::P016: return { 1, 1, 16, false };
-    case K::YUY2: return { 1, 0, 8, false };
-    case K::UYVY: return { 1, 0, 8, false };
-    case K::P210: return { 1, 0, 10, false };
-    case K::P216: return { 1, 0, 16, false };
-    case K::V210: return { 1, 0, 10, false };
-    case K::YV24: return { 0, 0, 8, false };
-    case K::AYUV: return { 0, 0, 8, false };
-    case K::Y410: return { 0, 0, 10, false };
-    case K::V410: return { 0, 0, 10, false };
-    case K::Y416: return { 0, 0, 16, false };
-    case K::RGB24: return { 0, 0, 8, true };
-    case K::RGB32: return { 0, 0, 8, true };
-    case K::RGB48: return { 0, 0, 16, true };
+    case K::NV12: return { 1, 1, 8 };
+    case K::P010: return { 1, 1, 10 };
     }
-    return { 1, 1, 8, false };
+    return { 1, 1, 8 };
 }
 
 // Copies one plane (full or chroma), right-shifting each sample by `shift` (for 10-bit-in-16
@@ -118,8 +98,6 @@ auto YuvToRgbConverter::Create(const Params &params, std::wstring &error) -> std
     converter->_subsampleW = info.subsampleW;
     converter->_subsampleH = info.subsampleH;
     converter->_planeBytes = info.depth <= 8 ? 1 : 2;
-    converter->_rgb = info.rgb;
-    converter->_bottomUp = params.bottomUp;
 
     const int cW = params.width >> info.subsampleW;
     const int cH = params.height >> info.subsampleH;
@@ -156,8 +134,8 @@ auto YuvToRgbConverter::Create(const Params &params, std::wstring &error) -> std
     src.pixel_type = converter->_planeBytes == 1 ? ZIMG_PIXEL_BYTE : ZIMG_PIXEL_WORD;
     src.subsample_w = static_cast<unsigned>(info.subsampleW);
     src.subsample_h = static_cast<unsigned>(info.subsampleH);
-    src.color_family = info.rgb ? ZIMG_COLOR_RGB : ZIMG_COLOR_YUV;
-    src.matrix_coefficients = info.rgb ? ZIMG_MATRIX_RGB : (params.bt709 ? ZIMG_MATRIX_BT709 : ZIMG_MATRIX_BT470_BG);
+    src.color_family = ZIMG_COLOR_YUV;
+    src.matrix_coefficients = params.bt709 ? ZIMG_MATRIX_BT709 : ZIMG_MATRIX_BT470_BG;
     src.transfer_characteristics = ZIMG_TRANSFER_UNSPECIFIED; // no transfer conversion
     src.color_primaries = ZIMG_PRIMARIES_UNSPECIFIED;         // no gamut conversion
     src.depth = static_cast<unsigned>(info.depth);
@@ -226,9 +204,8 @@ YuvToRgbConverter::~YuvToRgbConverter() {
     _aligned_free(_tmp);
 }
 
-// Unpacks the source frame's layout into the planar buffers zimg consumes. Plane 0 = Y (or R),
-// plane 1 = U (or G), plane 2 = V (or B). 10-bit-in-16 formats (P0xx/P2xx) are right-shifted to
-// right-justify the value; bit-packed formats (v210/Y410/v410) extract the 10-bit fields.
+// Splits the semi-planar source into the planar buffers zimg consumes. Plane 0 = Y, plane 1 = U,
+// and plane 2 = V. P010 samples are shifted right to convert from MSB-aligned to 10-bit values.
 auto YuvToRgbConverter::Deinterleave(const unsigned char *srcBuffer) -> void {
     const int w = _width;
     const int h = _height;
@@ -238,13 +215,10 @@ auto YuvToRgbConverter::Deinterleave(const unsigned char *srcBuffer) -> void {
 
     switch (_kind) {
     case Kind::NV12:
-    case Kind::P210:
-    case Kind::P010:
-    case Kind::P016:
-    case Kind::P216: {
+    case Kind::P010: {
         const ptrdiff_t sY = static_cast<ptrdiff_t>(w) * bps;
         const unsigned char *srcUV = srcBuffer + sY * h;
-        const int shift = (_kind == Kind::P010 || _kind == Kind::P210) ? 6 : 0;
+        const int shift = _kind == Kind::P010 ? 6 : 0;
         if (bps == 1) {
             CopyPlane<uint8_t>(_p0, _stride0, srcBuffer, sY, w, h, 0);
             SplitUV<uint8_t>(_p1, _p2, _strideC, srcUV, sY, cW, cH, 0);
@@ -255,166 +229,6 @@ auto YuvToRgbConverter::Deinterleave(const unsigned char *srcBuffer) -> void {
         break;
     }
 
-    case Kind::YV12:
-    case Kind::YV24: {
-        // Planar, plane order Y, V, U.
-        const ptrdiff_t sY = static_cast<ptrdiff_t>(w) * bps;
-        const ptrdiff_t sC = static_cast<ptrdiff_t>(cW) * bps;
-        const unsigned char *srcV = srcBuffer + sY * h;
-        const unsigned char *srcU = srcV + sC * cH;
-        CopyPlane<uint8_t>(_p0, _stride0, srcBuffer, sY, w, h, 0);
-        CopyPlane<uint8_t>(_p2, _strideC, srcV, sC, cW, cH, 0); // V -> plane 2
-        CopyPlane<uint8_t>(_p1, _strideC, srcU, sC, cW, cH, 0); // U -> plane 1
-        break;
-    }
-
-    case Kind::YUY2:
-    case Kind::UYVY: {
-        const ptrdiff_t srcStride = static_cast<ptrdiff_t>(w) * 2;
-        const int yOff = _kind == Kind::YUY2 ? 0 : 1; // YUY2: Y U Y V ; UYVY: U Y V Y
-        const int cOff = _kind == Kind::YUY2 ? 1 : 0;
-        for (int y = 0; y < h; ++y) {
-            const uint8_t *s = srcBuffer + static_cast<ptrdiff_t>(y) * srcStride;
-            auto *yr = static_cast<uint8_t *>(_p0) + static_cast<ptrdiff_t>(y) * _stride0;
-            auto *ur = static_cast<uint8_t *>(_p1) + static_cast<ptrdiff_t>(y) * _strideC;
-            auto *vr = static_cast<uint8_t *>(_p2) + static_cast<ptrdiff_t>(y) * _strideC;
-            for (int x = 0; x < cW; ++x) {
-                yr[2 * x + 0] = s[4 * x + yOff];
-                yr[2 * x + 1] = s[4 * x + yOff + 2];
-                ur[x] = s[4 * x + cOff];
-                vr[x] = s[4 * x + cOff + 2];
-            }
-        }
-        break;
-    }
-
-    case Kind::V210: {
-        // 10-bit 4:2:2 packed: 4 little-endian DWORDs hold 6 luma + 3 chroma pairs.
-        const ptrdiff_t srcStride = (static_cast<ptrdiff_t>(w) + 47) / 48 * 128;
-        const int groups = (w + 5) / 6;
-        for (int y = 0; y < h; ++y) {
-            const auto *words = reinterpret_cast<const uint32_t *>(srcBuffer + static_cast<ptrdiff_t>(y) * srcStride);
-            auto *yr = reinterpret_cast<uint16_t *>(static_cast<unsigned char *>(_p0) + static_cast<ptrdiff_t>(y) * _stride0);
-            auto *ur = reinterpret_cast<uint16_t *>(static_cast<unsigned char *>(_p1) + static_cast<ptrdiff_t>(y) * _strideC);
-            auto *vr = reinterpret_cast<uint16_t *>(static_cast<unsigned char *>(_p2) + static_cast<ptrdiff_t>(y) * _strideC);
-            for (int g = 0; g < groups; ++g) {
-                const uint32_t w0 = words[4 * g + 0];
-                const uint32_t w1 = words[4 * g + 1];
-                const uint32_t w2 = words[4 * g + 2];
-                const uint32_t w3 = words[4 * g + 3];
-                const uint16_t U0 = w0 & 0x3FF, Y0 = (w0 >> 10) & 0x3FF, V0 = (w0 >> 20) & 0x3FF;
-                const uint16_t Y1 = w1 & 0x3FF, U2 = (w1 >> 10) & 0x3FF, Y2 = (w1 >> 20) & 0x3FF;
-                const uint16_t V2 = w2 & 0x3FF, Y3 = (w2 >> 10) & 0x3FF, U4 = (w2 >> 20) & 0x3FF;
-                const uint16_t Y4 = w3 & 0x3FF, V4 = (w3 >> 10) & 0x3FF, Y5 = (w3 >> 20) & 0x3FF;
-                const int yb = 6 * g;
-                const int cb = 3 * g;
-                const uint16_t lum[6] = { Y0, Y1, Y2, Y3, Y4, Y5 };
-                for (int i = 0; i < 6; ++i) {
-                    if (yb + i < w) {
-                        yr[yb + i] = lum[i];
-                    }
-                }
-                const uint16_t us[3] = { U0, U2, U4 };
-                const uint16_t vs[3] = { V0, V2, V4 };
-                for (int i = 0; i < 3; ++i) {
-                    if (cb + i < cW) {
-                        ur[cb + i] = us[i];
-                        vr[cb + i] = vs[i];
-                    }
-                }
-            }
-        }
-        break;
-    }
-
-    case Kind::AYUV: {
-        // 8-bit 4:4:4 packed, bytes per pixel: V, U, Y, A.
-        const ptrdiff_t srcStride = static_cast<ptrdiff_t>(w) * 4;
-        for (int y = 0; y < h; ++y) {
-            const uint8_t *s = srcBuffer + static_cast<ptrdiff_t>(y) * srcStride;
-            auto *yr = static_cast<uint8_t *>(_p0) + static_cast<ptrdiff_t>(y) * _stride0;
-            auto *ur = static_cast<uint8_t *>(_p1) + static_cast<ptrdiff_t>(y) * _strideC;
-            auto *vr = static_cast<uint8_t *>(_p2) + static_cast<ptrdiff_t>(y) * _strideC;
-            for (int x = 0; x < w; ++x) {
-                vr[x] = s[4 * x + 0];
-                ur[x] = s[4 * x + 1];
-                yr[x] = s[4 * x + 2];
-            }
-        }
-        break;
-    }
-
-    case Kind::Y410:
-    case Kind::V410: {
-        // 10-bit 4:4:4 packed in a DWORD. Y410: U[0:10] Y[10:20] V[20:30] A[30:32].
-        //                                 v410: pad[0:2] U[2:12] Y[12:22] V[22:32].
-        const ptrdiff_t srcStride = static_cast<ptrdiff_t>(w) * 4;
-        const int sh = _kind == Kind::Y410 ? 0 : 2;
-        for (int y = 0; y < h; ++y) {
-            const auto *s = reinterpret_cast<const uint32_t *>(srcBuffer + static_cast<ptrdiff_t>(y) * srcStride);
-            auto *yr = reinterpret_cast<uint16_t *>(static_cast<unsigned char *>(_p0) + static_cast<ptrdiff_t>(y) * _stride0);
-            auto *ur = reinterpret_cast<uint16_t *>(static_cast<unsigned char *>(_p1) + static_cast<ptrdiff_t>(y) * _strideC);
-            auto *vr = reinterpret_cast<uint16_t *>(static_cast<unsigned char *>(_p2) + static_cast<ptrdiff_t>(y) * _strideC);
-            for (int x = 0; x < w; ++x) {
-                const uint32_t px = s[x];
-                ur[x] = static_cast<uint16_t>((px >> (sh + 0)) & 0x3FF);
-                yr[x] = static_cast<uint16_t>((px >> (sh + 10)) & 0x3FF);
-                vr[x] = static_cast<uint16_t>((px >> (sh + 20)) & 0x3FF);
-            }
-        }
-        break;
-    }
-
-    case Kind::Y416: {
-        // 16-bit 4:4:4 packed, uint16 per pixel: U, Y, V, A.
-        const ptrdiff_t srcStride = static_cast<ptrdiff_t>(w) * 8;
-        for (int y = 0; y < h; ++y) {
-            const auto *s = reinterpret_cast<const uint16_t *>(srcBuffer + static_cast<ptrdiff_t>(y) * srcStride);
-            auto *yr = reinterpret_cast<uint16_t *>(static_cast<unsigned char *>(_p0) + static_cast<ptrdiff_t>(y) * _stride0);
-            auto *ur = reinterpret_cast<uint16_t *>(static_cast<unsigned char *>(_p1) + static_cast<ptrdiff_t>(y) * _strideC);
-            auto *vr = reinterpret_cast<uint16_t *>(static_cast<unsigned char *>(_p2) + static_cast<ptrdiff_t>(y) * _strideC);
-            for (int x = 0; x < w; ++x) {
-                ur[x] = s[4 * x + 0];
-                yr[x] = s[4 * x + 1];
-                vr[x] = s[4 * x + 2];
-            }
-        }
-        break;
-    }
-
-    case Kind::RGB24:
-    case Kind::RGB32:
-    case Kind::RGB48: {
-        // Packed RGB. 24/32-bit are byte order B,G,R(,X); 48-bit is uint16 R,G,B. DIBs are
-        // bottom-up when biHeight > 0 (read rows in reverse so the planar output is top-down).
-        const int bytesPerPixel = _kind == Kind::RGB24 ? 3 : (_kind == Kind::RGB32 ? 4 : 6);
-        const ptrdiff_t srcStride = _kind == Kind::RGB32 ? static_cast<ptrdiff_t>(w) * 4 : Align4(w * bytesPerPixel);
-        for (int y = 0; y < h; ++y) {
-            const int srcY = _bottomUp ? (h - 1 - y) : y;
-            const unsigned char *row = srcBuffer + static_cast<ptrdiff_t>(srcY) * srcStride;
-            if (_kind == Kind::RGB48) {
-                const auto *s = reinterpret_cast<const uint16_t *>(row);
-                auto *rr = reinterpret_cast<uint16_t *>(static_cast<unsigned char *>(_p0) + static_cast<ptrdiff_t>(y) * _stride0);
-                auto *gg = reinterpret_cast<uint16_t *>(static_cast<unsigned char *>(_p1) + static_cast<ptrdiff_t>(y) * _strideC);
-                auto *bb = reinterpret_cast<uint16_t *>(static_cast<unsigned char *>(_p2) + static_cast<ptrdiff_t>(y) * _strideC);
-                for (int x = 0; x < w; ++x) {
-                    rr[x] = s[3 * x + 0];
-                    gg[x] = s[3 * x + 1];
-                    bb[x] = s[3 * x + 2];
-                }
-            } else {
-                auto *rr = static_cast<uint8_t *>(_p0) + static_cast<ptrdiff_t>(y) * _stride0;
-                auto *gg = static_cast<uint8_t *>(_p1) + static_cast<ptrdiff_t>(y) * _strideC;
-                auto *bb = static_cast<uint8_t *>(_p2) + static_cast<ptrdiff_t>(y) * _strideC;
-                for (int x = 0; x < w; ++x) {
-                    bb[x] = row[bytesPerPixel * x + 0];
-                    gg[x] = row[bytesPerPixel * x + 1];
-                    rr[x] = row[bytesPerPixel * x + 2];
-                }
-            }
-        }
-        break;
-    }
     }
 }
 
