@@ -48,9 +48,9 @@ private:
     // input. Leaves _processor null (pass-through) if there's no model/engine or it fails.
     auto SetupProcessor() -> void;
 
-    // True if the currently playing file should be processed (no glob filter, unknown file, or
-    // a matching file).
-    auto ShouldProcessCurrentFile() -> bool;
+    // True if the current input passes the optional 1080p limit and the playing file matches
+    // the configured glob filter (or no glob restriction is configured).
+    auto ShouldProcessCurrentFile(const CMediaType &inputType) -> bool;
 
     // Walks the graph for an IFileSourceFilter and returns the file path being played.
     auto GetSourceFilePath() const -> std::wstring;

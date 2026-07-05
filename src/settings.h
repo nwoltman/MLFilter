@@ -13,6 +13,7 @@ public:
     auto Save() const -> void;
 
     std::wstring modelPath;
+    bool onlyRun1080pOrLower = true;
 
     // Newline-separated wildcard patterns (e.g. "*.mkv"). If non-empty, the filter only
     // processes files whose path matches at least one pattern; otherwise it removes

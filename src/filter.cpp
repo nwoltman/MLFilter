@@ -188,9 +188,7 @@ auto CMLFilter::CheckInputType(const CMediaType *mtIn) -> HRESULT {
         return VFW_E_TYPE_NOT_ACCEPTED;
     }
 
-    // If the playing file doesn't match the configured globs, refuse the connection so the
-    // graph routes around us, and remove this filter from the graph.
-    if (!ShouldProcessCurrentFile()) {
+    if (!ShouldProcessCurrentFile(*mtIn)) {
         ScheduleSelfRemoval();
         return VFW_E_TYPE_NOT_ACCEPTED;
     }
@@ -545,9 +543,20 @@ auto CMLFilter::SetupProcessor() -> void {
     // On failure _processor stays null and the filter passes frames through unchanged.
 }
 
-auto CMLFilter::ShouldProcessCurrentFile() -> bool {
+// If the resolution is above 1080p or the file path doesn't match the configured globs,
+// we should not process the file and should remove this filter from the graph.
+auto CMLFilter::ShouldProcessCurrentFile(const CMediaType &inputType) -> bool {
     Settings settings;
     settings.Load();
+
+    int width = 0;
+    int height = 0;
+    if (settings.onlyRun1080pOrLower &&
+        GetVideoResolution(inputType, width, height) &&
+        (width > MAX_INPUT_WIDTH || height > MAX_INPUT_HEIGHT)) {
+        return false;
+    }
+
     if (Trim(settings.fileGlobs).empty()) {
         return true;  // no glob filter configured
     }

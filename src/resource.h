@@ -16,3 +16,4 @@
 #define IDC_EDIT_LOG          1007
 #define IDC_EDIT_GLOBS        1008
 #define IDC_BUTTON_DELETE_ENGINES 1009
+#define IDC_CHECK_ONLY_1080P  1010

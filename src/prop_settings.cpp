@@ -52,6 +52,8 @@ auto CMLFilterPropSettings::OnActivate() -> HRESULT {
     _settings.Load();
     SetDlgItemTextW(m_Dlg, IDC_EDIT_MODEL, _settings.modelPath.c_str());
     SetDlgItemTextW(m_Dlg, IDC_EDIT_GLOBS, _settings.fileGlobs.c_str());
+    CheckDlgButton(m_Dlg, IDC_CHECK_ONLY_1080P,
+                   _settings.onlyRun1080pOrLower ? BST_CHECKED : BST_UNCHECKED);
     return S_OK;
 }
 
@@ -60,6 +62,8 @@ auto CMLFilterPropSettings::OnApplyChanges() -> HRESULT {
     // selected (and can be triggered manually with the "Build 1080p engine" button).
     _settings.modelPath = GetControlText(m_Dlg, IDC_EDIT_MODEL);
     _settings.fileGlobs = GetControlText(m_Dlg, IDC_EDIT_GLOBS);
+    _settings.onlyRun1080pOrLower =
+        IsDlgButtonChecked(m_Dlg, IDC_CHECK_ONLY_1080P) == BST_CHECKED;
     _settings.Save();
     return S_OK;
 }
@@ -218,6 +222,10 @@ auto CMLFilterPropSettings::OnReceiveMessage(HWND hwnd, UINT uMsg, WPARAM wParam
 
             case IDC_BUTTON_DELETE_ENGINES:
                 DeleteAllEngines();
+                return TRUE;
+
+            case IDC_CHECK_ONLY_1080P:
+                SetDirty();
                 return TRUE;
             }
         } else if (HIWORD(wParam) == EN_CHANGE && (LOWORD(wParam) == IDC_EDIT_MODEL || LOWORD(wParam) == IDC_EDIT_GLOBS)) {
