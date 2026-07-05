@@ -1,25 +1,23 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# Benchmarks MLFilter's TensorRT inference pipeline on a real video file, the way
-# mpc-vapoursynth-scripts' benchmark.vpy benchmarks the vsmlrt trt.Model pipeline.
+# Benchmarks MLFilter's TensorRT inference pipeline on a deterministic synthetic frame.
 # Builds the benchmark exe, makes the TensorRT/CUDA runtime DLLs findable, and runs it.
 #
-# Run with the video to benchmark:  .\benchmark.ps1 "X:\clip.mkv" [-Frames 500]
-# (benchmark.bat passes a fixed path so it can be launched by double-clicking.)
+# Defaults to a 1920x1080 NV12 frame: .\benchmark.ps1
 
 #Requires -Version 5.1
 [CmdletBinding()]
 param(
-    # The video file to benchmark with. Decoded by ffmpeg; uses its native resolution.
-    # Positional, so the path can be passed without naming it: .\benchmark.ps1 "X:\clip.mkv"
-    [Parameter(Mandatory = $true, Position = 0)]
-    [string]$Video,
+    [int]$Width = 1920,
+    [int]$Height = 1080,
+    [ValidateSet("nv12", "p010")]
+    [string]$Format = "nv12",
 
     # ONNX model to build the engine from. Empty -> use the model configured in MLFilter's
     # settings (HKCU\Software\MLFilter\ModelPath), same as the filter does during playback.
     [string]$Model = "",
 
-    [int]$Frames = 300,   # frames to time after warmup (0 = run to end of file)
+    [int]$Frames = 300,   # frames to time after warmup
     [int]$Warmup = 10,    # frames to discard before timing (engine/autotune warmup)
     [ValidateSet("Release", "Debug")]
     [string]$Configuration = "Release",
@@ -58,7 +56,8 @@ $cudaBin = @((Join-Path $env:CUDA_PATH "bin\x64"), (Join-Path $env:CUDA_PATH "bi
 $env:PATH = "$trtBin;$cudaBin;$env:PATH"
 
 # --- Run -----------------------------------------------------------------------------
-$arguments = @($Video, "--frames", $Frames, "--warmup", $Warmup)
+$arguments = @("--width", $Width, "--height", $Height, "--format", $Format,
+               "--frames", $Frames, "--warmup", $Warmup)
 if ($Model) { $arguments += @("--model", $Model) }
 
 Write-Host "==> $exe" -ForegroundColor Cyan

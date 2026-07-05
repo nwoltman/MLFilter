@@ -430,7 +430,8 @@ FodyWeavers.xsd
 
 # Misc
 *.sublime-*
+.agents/
 .DS_store
 
-# Local double-click benchmark launcher (holds a machine-specific video path)
+# Local double-click benchmark launcher
 benchmark.bat
