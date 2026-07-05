@@ -147,7 +147,7 @@ auto wmain(int argc, wchar_t **argv) -> int {
     if (modelPath.empty()) {
         MLFilter::Settings settings;
         settings.Load();
-        modelPath = settings.modelPath;
+        modelPath = settings.hdModelPath;
     }
     if (modelPath.empty() || !std::filesystem::exists(modelPath)) {
         wprintf(L"No ONNX model. Pass --model <file.onnx> or configure one in MLFilter's settings.\n");

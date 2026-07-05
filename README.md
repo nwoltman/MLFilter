@@ -16,7 +16,9 @@ The filter is mainly intended to be used to upscale video with models like the
     first, then move the folder, then re-install it.
 - Open your video player software and add `MLFilter` as an external filter
 - Set the filter to `Prefer` (or use `Merit` if you have other, similar filters and need them to run in a specific order)
-- Double-click the filter to open the filter configuration. Select an ONNX model to use with the filter.
+- Double-click the filter to open the filter configuration. Select HD and/or SD ONNX models.
+  The SD model is used when either source dimension is below 720p (1280x720); otherwise
+  the HD model is used. With neither model configured, the filter removes itself from the graph.
 
 ## System requirements
 

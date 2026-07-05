@@ -50,7 +50,8 @@ auto CALLBACK CMLFilterPropSettings::CreateInstance(LPUNKNOWN pUnk, HRESULT *phr
 
 auto CMLFilterPropSettings::OnActivate() -> HRESULT {
     _settings.Load();
-    SetDlgItemTextW(m_Dlg, IDC_EDIT_MODEL, _settings.modelPath.c_str());
+    SetDlgItemTextW(m_Dlg, IDC_EDIT_HD_MODEL, _settings.hdModelPath.c_str());
+    SetDlgItemTextW(m_Dlg, IDC_EDIT_SD_MODEL, _settings.sdModelPath.c_str());
     SetDlgItemTextW(m_Dlg, IDC_EDIT_GLOBS, _settings.fileGlobs.c_str());
     CheckDlgButton(m_Dlg, IDC_CHECK_ONLY_1080P,
                    _settings.onlyRun1080pOrLower ? BST_CHECKED : BST_UNCHECKED);
@@ -58,9 +59,9 @@ auto CMLFilterPropSettings::OnActivate() -> HRESULT {
 }
 
 auto CMLFilterPropSettings::OnApplyChanges() -> HRESULT {
-    // Just persist settings. The 1080p engine is built automatically when a model is
-    // selected (and can be triggered manually with the "Build 1080p engine" button).
-    _settings.modelPath = GetControlText(m_Dlg, IDC_EDIT_MODEL);
+    // Engines are pre-built when models are selected and can also be built manually.
+    _settings.hdModelPath = GetControlText(m_Dlg, IDC_EDIT_HD_MODEL);
+    _settings.sdModelPath = GetControlText(m_Dlg, IDC_EDIT_SD_MODEL);
     _settings.fileGlobs = GetControlText(m_Dlg, IDC_EDIT_GLOBS);
     _settings.onlyRun1080pOrLower =
         IsDlgButtonChecked(m_Dlg, IDC_CHECK_ONLY_1080P) == BST_CHECKED;
@@ -87,12 +88,12 @@ auto CMLFilterPropSettings::AppendLog(const std::wstring &line) -> void {
     SendMessageW(logControl, EM_REPLACESEL, FALSE, reinterpret_cast<LPARAM>(withNewline.c_str()));
 }
 
-auto CMLFilterPropSettings::StartBuild(bool quietIfNoModel) -> void {
+auto CMLFilterPropSettings::StartBuild(int modelControlId, int width, int height, bool quietIfNoModel) -> void {
     if (_isBuilding) {
         return;
     }
 
-    const std::filesystem::path modelPath = GetControlText(m_Dlg, IDC_EDIT_MODEL);
+    const std::filesystem::path modelPath = GetControlText(m_Dlg, modelControlId);
     if (modelPath.empty() || !std::filesystem::exists(modelPath)) {
         if (!quietIfNoModel) {
             AppendLog(L"Please select a valid ONNX model file first.");
@@ -100,26 +101,29 @@ auto CMLFilterPropSettings::StartBuild(bool quietIfNoModel) -> void {
         return;
     }
 
-    const EngineBuildRequest request { .onnxPath = modelPath, .width = PREBUILD_WIDTH, .height = PREBUILD_HEIGHT };
+    const EngineBuildRequest request { .onnxPath = modelPath, .width = width, .height = height };
 
     // Never rebuild an engine that already exists.
     TensorRTEngineBuilder builder;
     if (const std::filesystem::path existing = builder.EnginePath(request);
         !existing.empty() && std::filesystem::exists(existing)) {
-        AppendLog(std::format(L"{}x{} engine is already built for this model: {}", PREBUILD_WIDTH, PREBUILD_HEIGHT, existing.filename().wstring()));
+        AppendLog(std::format(L"{}x{} engine is already built for this model: {}", width, height, existing.filename().wstring()));
         AppendLog(L"Skipping build. Use \"Delete all engine files\" first if you want to rebuild it.");
         return;
     }
 
     _isBuilding = true;
     // Lock the model picker and build controls while the engine builds.
-    EnableWindow(GetDlgItem(m_Dlg, IDC_BUTTON_BUILD), FALSE);
-    EnableWindow(GetDlgItem(m_Dlg, IDC_EDIT_MODEL), FALSE);
-    EnableWindow(GetDlgItem(m_Dlg, IDC_BUTTON_BROWSE), FALSE);
+    EnableWindow(GetDlgItem(m_Dlg, IDC_BUTTON_BUILD_HD), FALSE);
+    EnableWindow(GetDlgItem(m_Dlg, IDC_BUTTON_BUILD_SD), FALSE);
+    EnableWindow(GetDlgItem(m_Dlg, IDC_EDIT_HD_MODEL), FALSE);
+    EnableWindow(GetDlgItem(m_Dlg, IDC_EDIT_SD_MODEL), FALSE);
+    EnableWindow(GetDlgItem(m_Dlg, IDC_BUTTON_BROWSE_HD), FALSE);
+    EnableWindow(GetDlgItem(m_Dlg, IDC_BUTTON_BROWSE_SD), FALSE);
     EnableWindow(GetDlgItem(m_Dlg, IDC_BUTTON_DELETE_ENGINES), FALSE);
 
     const HWND dlg = m_Dlg;
-    AppendLog(std::format(L"--- Building {}x{} engine ---", PREBUILD_WIDTH, PREBUILD_HEIGHT));
+    AppendLog(std::format(L"--- Building {}x{} engine ---", width, height));
 
     // The worker captures only copies (no `this`), so it is safe even if the page is
     // closed mid-build. It reports progress and completion via PostMessage.
@@ -186,9 +190,12 @@ auto CMLFilterPropSettings::OnReceiveMessage(HWND hwnd, UINT uMsg, WPARAM wParam
 
     case WM_APP_BUILD_DONE:
         _isBuilding = false;
-        EnableWindow(GetDlgItem(m_Dlg, IDC_BUTTON_BUILD), TRUE);
-        EnableWindow(GetDlgItem(m_Dlg, IDC_EDIT_MODEL), TRUE);
-        EnableWindow(GetDlgItem(m_Dlg, IDC_BUTTON_BROWSE), TRUE);
+        EnableWindow(GetDlgItem(m_Dlg, IDC_BUTTON_BUILD_HD), TRUE);
+        EnableWindow(GetDlgItem(m_Dlg, IDC_BUTTON_BUILD_SD), TRUE);
+        EnableWindow(GetDlgItem(m_Dlg, IDC_EDIT_HD_MODEL), TRUE);
+        EnableWindow(GetDlgItem(m_Dlg, IDC_EDIT_SD_MODEL), TRUE);
+        EnableWindow(GetDlgItem(m_Dlg, IDC_BUTTON_BROWSE_HD), TRUE);
+        EnableWindow(GetDlgItem(m_Dlg, IDC_BUTTON_BROWSE_SD), TRUE);
         EnableWindow(GetDlgItem(m_Dlg, IDC_BUTTON_DELETE_ENGINES), TRUE);
         AppendLog(L"--- Done ---");
         return TRUE;
@@ -196,7 +203,8 @@ auto CMLFilterPropSettings::OnReceiveMessage(HWND hwnd, UINT uMsg, WPARAM wParam
     case WM_COMMAND:
         if (HIWORD(wParam) == BN_CLICKED) {
             switch (LOWORD(wParam)) {
-            case IDC_BUTTON_BROWSE: {
+            case IDC_BUTTON_BROWSE_HD:
+            case IDC_BUTTON_BROWSE_SD: {
                 std::array<WCHAR, MAX_PATH> file {};
 
                 OPENFILENAMEW ofn {};
@@ -208,16 +216,21 @@ auto CMLFilterPropSettings::OnReceiveMessage(HWND hwnd, UINT uMsg, WPARAM wParam
                 ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
 
                 if (GetOpenFileNameW(&ofn) == TRUE) {
-                    SetDlgItemTextW(hwnd, IDC_EDIT_MODEL, file.data());
+                    const bool isSd = LOWORD(wParam) == IDC_BUTTON_BROWSE_SD;
+                    SetDlgItemTextW(hwnd, isSd ? IDC_EDIT_SD_MODEL : IDC_EDIT_HD_MODEL, file.data());
                     SetDirty();
-                    // Start building the 1080p engine immediately once a model is chosen.
-                    StartBuild(/*quietIfNoModel*/ false);
+                    StartBuild(isSd ? IDC_EDIT_SD_MODEL : IDC_EDIT_HD_MODEL,
+                               isSd ? SD_PREBUILD_WIDTH : HD_PREBUILD_WIDTH,
+                               isSd ? SD_PREBUILD_HEIGHT : HD_PREBUILD_HEIGHT, false);
                 }
                 return TRUE;
             }
 
-            case IDC_BUTTON_BUILD:
-                StartBuild(/*quietIfNoModel*/ false);
+            case IDC_BUTTON_BUILD_HD:
+                StartBuild(IDC_EDIT_HD_MODEL, HD_PREBUILD_WIDTH, HD_PREBUILD_HEIGHT, false);
+                return TRUE;
+            case IDC_BUTTON_BUILD_SD:
+                StartBuild(IDC_EDIT_SD_MODEL, SD_PREBUILD_WIDTH, SD_PREBUILD_HEIGHT, false);
                 return TRUE;
 
             case IDC_BUTTON_DELETE_ENGINES:
@@ -228,7 +241,9 @@ auto CMLFilterPropSettings::OnReceiveMessage(HWND hwnd, UINT uMsg, WPARAM wParam
                 SetDirty();
                 return TRUE;
             }
-        } else if (HIWORD(wParam) == EN_CHANGE && (LOWORD(wParam) == IDC_EDIT_MODEL || LOWORD(wParam) == IDC_EDIT_GLOBS)) {
+        } else if (HIWORD(wParam) == EN_CHANGE &&
+                   (LOWORD(wParam) == IDC_EDIT_HD_MODEL || LOWORD(wParam) == IDC_EDIT_SD_MODEL ||
+                    LOWORD(wParam) == IDC_EDIT_GLOBS)) {
             SetDirty();
             return TRUE;
         }

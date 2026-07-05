@@ -117,6 +117,14 @@ auto GetVideoResolution(const CMediaType &mt, int &width, int &height) -> bool {
     return false;
 }
 
+auto SelectModel(const Settings &settings, int width, int height) -> const std::wstring & {
+    if (!settings.sdModelPath.empty() &&
+        (width < HD_MIN_WIDTH || height < HD_MIN_HEIGHT)) {
+        return settings.sdModelPath;
+    }
+    return settings.hdModelPath;
+}
+
 // Maps an internally supported input subtype to the converter's format kind.
 auto KindForSubtype(const GUID &s, YuvToRgbConverter::Kind &kind) -> bool {
     using K = YuvToRgbConverter::Kind;
@@ -472,9 +480,6 @@ auto CMLFilter::BreakConnect(PIN_DIRECTION direction) -> HRESULT {
 auto CMLFilter::EnsureEngineForInput() -> void {
     Settings settings;
     settings.Load();
-    if (settings.modelPath.empty() || !std::filesystem::exists(settings.modelPath)) {
-        return;  // no model configured: pure pass-through
-    }
 
     int width = 0;
     int height = 0;
@@ -482,8 +487,13 @@ auto CMLFilter::EnsureEngineForInput() -> void {
         return;
     }
 
+    const std::wstring &modelPath = SelectModel(settings, width, height);
+    if (modelPath.empty() || !std::filesystem::exists(modelPath)) {
+        return;
+    }
+
     TensorRTEngineBuilder builder;
-    const EngineBuildRequest request { .onnxPath = settings.modelPath, .width = width, .height = height };
+    const EngineBuildRequest request { .onnxPath = modelPath, .width = width, .height = height };
     if (builder.Exists(request)) {
         return;  // already built for this resolution/GPU/driver
     }
@@ -513,9 +523,6 @@ auto CMLFilter::SetupProcessor() -> void {
 
     Settings settings;
     settings.Load();
-    if (settings.modelPath.empty() || !std::filesystem::exists(settings.modelPath)) {
-        return;  // pass-through
-    }
 
     int width = 0;
     int height = 0;
@@ -523,8 +530,13 @@ auto CMLFilter::SetupProcessor() -> void {
         return;
     }
 
+    const std::wstring &modelPath = SelectModel(settings, width, height);
+    if (modelPath.empty() || !std::filesystem::exists(modelPath)) {
+        return;
+    }
+
     TensorRTEngineBuilder builder;
-    const EngineBuildRequest request { .onnxPath = settings.modelPath, .width = width, .height = height };
+    const EngineBuildRequest request { .onnxPath = modelPath, .width = width, .height = height };
     if (!builder.Exists(request)) {
         return;  // the engine build failed earlier; fall back to pass-through
     }
@@ -543,16 +555,24 @@ auto CMLFilter::SetupProcessor() -> void {
     // On failure _processor stays null and the filter passes frames through unchanged.
 }
 
-// If the resolution is above 1080p or the file path doesn't match the configured globs,
-// we should not process the file and should remove this filter from the graph.
+// Remove the filter when the selected model is unavailable, the resolution is above
+// the configured limit, or the file path doesn't match the configured globs.
 auto CMLFilter::ShouldProcessCurrentFile(const CMediaType &inputType) -> bool {
     Settings settings;
     settings.Load();
 
     int width = 0;
     int height = 0;
+    if (!GetVideoResolution(inputType, width, height)) {
+        return false;
+    }
+
+    const std::wstring &modelPath = SelectModel(settings, width, height);
+    if (modelPath.empty() || !std::filesystem::exists(modelPath)) {
+        return false;
+    }
+
     if (settings.onlyRun1080pOrLower &&
-        GetVideoResolution(inputType, width, height) &&
         (width > MAX_INPUT_WIDTH || height > MAX_INPUT_HEIGHT)) {
         return false;
     }

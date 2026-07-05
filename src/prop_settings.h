@@ -10,8 +10,8 @@
 
 namespace MLFilter {
 
-// Property page: select an ONNX model, choose input resolutions, and build a
-// static fp16 TensorRT engine per selected resolution.
+// Property page: select HD and SD ONNX models and pre-build their common-resolution
+// static fp16 TensorRT engines.
 class CMLFilterPropSettings : public CBasePropertyPage {
 public:
     CMLFilterPropSettings(LPUNKNOWN pUnk, HRESULT *phr);
@@ -24,7 +24,7 @@ public:
 
 private:
     auto SetDirty() -> void;
-    auto StartBuild(bool quietIfNoModel) -> void;
+    auto StartBuild(int modelControlId, int width, int height, bool quietIfNoModel) -> void;
     auto DeleteAllEngines() -> void;
     auto AppendLog(const std::wstring &line) -> void;
 

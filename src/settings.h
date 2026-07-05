@@ -12,7 +12,8 @@ public:
     auto Load() -> void;
     auto Save() const -> void;
 
-    std::wstring modelPath;
+    std::wstring hdModelPath;
+    std::wstring sdModelPath;
     bool onlyRun1080pOrLower = true;
 
     // Newline-separated wildcard patterns (e.g. "*.mkv"). If non-empty, the filter only

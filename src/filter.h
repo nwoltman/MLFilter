@@ -14,8 +14,8 @@ namespace MLFilter {
 
 // Copy transform: converts a supported 4:2:0 YUV input frame to RGB, runs the TensorRT engine, and
 // emits RGB48 downstream (a different pixel format and possibly a larger resolution than the
-// input, which is why this is a copy transform rather than transform-in-place). When no model
-// is configured (or the engine can't be loaded) it degrades to a copy pass-through.
+// input, which is why this is a copy transform rather than transform-in-place). When a selected
+// model's engine cannot be loaded it degrades to a copy pass-through.
 class CMLFilter
     : public CTransformFilter
     , public ISpecifyPropertyPages {
@@ -48,8 +48,8 @@ private:
     // input. Leaves _processor null (pass-through) if there's no model/engine or it fails.
     auto SetupProcessor() -> void;
 
-    // True if the current input passes the optional 1080p limit and the playing file matches
-    // the configured glob filter (or no glob restriction is configured).
+    // True if the model selected for the current resolution is available, the input passes
+    // the optional 1080p limit, and the playing file matches the configured glob filter.
     auto ShouldProcessCurrentFile(const CMediaType &inputType) -> bool;
 
     // Walks the graph for an IFileSourceFilter and returns the file path being played.
