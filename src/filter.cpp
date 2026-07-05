@@ -230,8 +230,7 @@ auto CMLFilter::CheckTransform(const CMediaType *mtIn, const CMediaType *mtOut) 
     }
 
     if (_processor == nullptr) {
-        // Pass-through: the output must match the input.
-        return *mtOut->Subtype() == *mtIn->Subtype() ? S_OK : VFW_E_TYPE_NOT_ACCEPTED;
+        return VFW_E_TYPE_NOT_ACCEPTED;
     }
 
     // Inference: output must be RGB48 at the engine's output resolution.
@@ -262,9 +261,7 @@ auto CMLFilter::GetMediaType(int iPosition, CMediaType *pMediaType) -> HRESULT {
     const CMediaType &inMt = m_pInput->CurrentMediaType();
 
     if (_processor == nullptr && _inputFormatSupported) {
-        // Pass-through: offer the input type unchanged.
-        *pMediaType = inMt;
-        return S_OK;
+        return VFW_E_TYPE_NOT_ACCEPTED;
     }
 
     int outW = 0;
@@ -367,7 +364,7 @@ auto CMLFilter::DecideBufferSize(IMemAllocator *pAlloc, ALLOCATOR_PROPERTIES *pP
     }
 
     // The output media type is already set during buffer negotiation (the pin may not yet
-    // report IsConnected()); its sample size is the pass-through fallback size.
+    // report IsConnected()).
     long requiredSize = m_pOutput->CurrentMediaType().GetSampleSize();
     if (_processor != nullptr) {
         requiredSize = Rgb48Stride(_processor->OutputWidth()) * _processor->OutputHeight();
@@ -423,23 +420,12 @@ auto CMLFilter::Transform(IMediaSample *pIn, IMediaSample *pOut) -> HRESULT {
     pOut->SetDiscontinuity(pIn->IsDiscontinuity() == S_OK);
     pOut->SetPreroll(pIn->IsPreroll() == S_OK);
 
-    if (_processor != nullptr) {
-        return _processor->Process(pIn, pOut);
+    if (_processor == nullptr) {
+        ScheduleSelfRemoval();
+        return VFW_E_TYPE_NOT_ACCEPTED;
     }
 
-    // Pass-through copy.
-    BYTE *src = nullptr;
-    BYTE *dst = nullptr;
-    if (FAILED(pIn->GetPointer(&src)) || FAILED(pOut->GetPointer(&dst))) {
-        return E_FAIL;
-    }
-    const long length = pIn->GetActualDataLength();
-    if (length > pOut->GetSize()) {
-        return E_FAIL;
-    }
-    CopyMemory(dst, src, length);
-    pOut->SetActualDataLength(length);
-    return S_OK;
+    return _processor->Process(pIn, pOut);
 }
 
 auto CMLFilter::CompleteConnect(PIN_DIRECTION direction, IPin *pReceivePin) -> HRESULT {
@@ -461,6 +447,9 @@ auto CMLFilter::CompleteConnect(PIN_DIRECTION direction, IPin *pReceivePin) -> H
         }
         EnsureEngineForInput();
         SetupProcessor();
+        if (_processor == nullptr) {
+            ScheduleSelfRemoval();
+        }
     }
 
     return hr;
@@ -537,13 +526,13 @@ auto CMLFilter::SetupProcessor() -> void {
     TensorRTEngineBuilder builder;
     const EngineBuildRequest request { .onnxPath = modelPath, .width = width, .height = height };
     if (!builder.Exists(request)) {
-        return;  // the engine build failed earlier; fall back to pass-through
+        return;  // the engine build failed earlier
     }
 
     const CMediaType &mt = m_pInput->CurrentMediaType();
     Yuv420Format kind = Yuv420Format::NV12;
     if (!KindForSubtype(*mt.Subtype(), kind)) {
-        return; // unsupported subtype -> pass-through
+        return;
     }
     bool bt709 = false;
     bool fullRange = false;
@@ -551,7 +540,6 @@ auto CMLFilter::SetupProcessor() -> void {
 
     std::wstring error;
     _processor = FrameProcessor::Create(builder.EnginePath(request), kind, bt709, fullRange, error);
-    // On failure _processor stays null and the filter passes frames through unchanged.
 }
 
 // Remove the filter when the selected model is unavailable, the resolution is above

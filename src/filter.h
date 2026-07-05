@@ -14,8 +14,7 @@ namespace MLFilter {
 
 // Copy transform: converts a supported 4:2:0 YUV input frame to RGB, runs the TensorRT engine, and
 // emits RGB48 downstream (a different pixel format and possibly a larger resolution than the
-// input, which is why this is a copy transform rather than transform-in-place). When a selected
-// model's engine cannot be loaded it degrades to a copy pass-through.
+// input, which is why this is a copy transform rather than transform-in-place).
 class CMLFilter
     : public CTransformFilter
     , public ISpecifyPropertyPages {
@@ -44,8 +43,8 @@ private:
     // showing a progress window during the build.
     auto EnsureEngineForInput() -> void;
 
-    // Deserializes the cached engine and builds the conversion pipeline for the connected
-    // input. Leaves _processor null (pass-through) if there's no model/engine or it fails.
+    // Deserializes the cached engine and builds the conversion pipeline for the connected input.
+    // A null processor means the filter cannot operate and must remove itself from the graph.
     auto SetupProcessor() -> void;
 
     // True if the model selected for the current resolution is available, the input passes
