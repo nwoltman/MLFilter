@@ -25,9 +25,6 @@
     <Import Project="$(SolutionDir)cuda.props" />
   </ImportGroup>
   <ItemDefinitionGroup>
-    <ClCompile>
-      <AdditionalIncludeDirectories>$(SolutionDir)deps\zimg\src\zimg\api;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-    </ClCompile>
     <Link>
       <!-- Console app: the benchmark prints to stdout. -->
       <SubSystem>Console</SubSystem>
@@ -35,7 +32,6 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="benchmark\benchmark.cpp" />
-    <ClCompile Include="src\color\yuv_to_rgb.cpp" />
     <ClCompile Include="src\engine\inference_session.cpp" />
     <ClCompile Include="src\engine\tensorrt_engine_builder.cpp" />
     <CudaCompile Include="src\engine\fp16_kernels.cu" />
@@ -46,7 +42,7 @@
     <ClCompile Include="src\registry.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="src\color\yuv_to_rgb.h" />
+    <ClInclude Include="src\color\yuv420_format.h" />
     <ClInclude Include="src\engine\inference_session.h" />
     <ClInclude Include="src\engine\fp16_kernels.h" />
     <ClInclude Include="src\engine\engine_builder.h" />
@@ -57,11 +53,6 @@
     <ClInclude Include="src\settings.h" />
     <ClInclude Include="src\registry.h" />
     <ClInclude Include="src\constants.h" />
-  </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="deps\zimg\_msvc\zimg\zimg.vcxproj">
-      <Project>{C8629E57-4D6F-40FA-82FC-B39824195932}</Project>
-    </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

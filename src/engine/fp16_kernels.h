@@ -4,7 +4,15 @@
 
 #include <cuda_runtime.h>
 
+#include "color/yuv420_format.h"
+
 namespace MLFilter {
+
+// Converts a tightly packed NV12/P010 frame already resident on the device directly to the
+// engine's tight planar fp16 NCHW input. Chroma reconstruction matches zimg's Catmull-Rom
+// (B=0,C=0.5), mirrored edges, and left/vertically-centred MPEG-2 sample siting.
+auto LaunchYuv420ToFp16Planar(const void *dYuv, void *dPlanarFp16, int width, int height,
+                              const Yuv420Conversion &conversion, cudaStream_t stream) -> cudaError_t;
 
 // CUDA kernels for the inference pipeline's fp16 tensor I/O: clamping the engine's fp16 input to
 // [0,1] before inference, and packing its fp16 planar-RGB output into RGB48 afterward. Each is

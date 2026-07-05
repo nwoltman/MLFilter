@@ -109,6 +109,7 @@ auto InferenceSession::Create(const std::filesystem::path &enginePath, std::wstr
     }
 
     if (cudaMalloc(&session->_dInput, session->InputBytes()) != cudaSuccess ||
+        cudaMalloc(&session->_dYuv, static_cast<size_t>(session->_inW) * session->_inH * 3) != cudaSuccess ||
         cudaMalloc(&session->_dOutput, session->OutputBytes()) != cudaSuccess ||
         cudaMalloc(&session->_dRgb48, session->OutputBytes()) != cudaSuccess) {
         error = L"Failed to allocate GPU memory for inference.";
@@ -128,7 +129,9 @@ auto InferenceSession::Create(const std::filesystem::path &enginePath, std::wstr
 
     if (cudaEventCreate(&session->_evStart) != cudaSuccess ||
         cudaEventCreate(&session->_evUploaded) != cudaSuccess ||
+        cudaEventCreate(&session->_evPreprocessed) != cudaSuccess ||
         cudaEventCreate(&session->_evInferred) != cudaSuccess ||
+        cudaEventCreate(&session->_evPacked) != cudaSuccess ||
         cudaEventCreate(&session->_evDownloaded) != cudaSuccess) {
         error = L"Failed to create CUDA timing events.";
         return nullptr;
@@ -144,8 +147,14 @@ InferenceSession::~InferenceSession() {
     if (_evUploaded != nullptr) {
         cudaEventDestroy(_evUploaded);
     }
+    if (_evPreprocessed != nullptr) {
+        cudaEventDestroy(_evPreprocessed);
+    }
     if (_evInferred != nullptr) {
         cudaEventDestroy(_evInferred);
+    }
+    if (_evPacked != nullptr) {
+        cudaEventDestroy(_evPacked);
     }
     if (_evDownloaded != nullptr) {
         cudaEventDestroy(_evDownloaded);
@@ -154,6 +163,7 @@ InferenceSession::~InferenceSession() {
         cudaStreamDestroy(_stream);
     }
     cudaFree(_dInput);
+    cudaFree(_dYuv);
     cudaFree(_dOutput);
     cudaFree(_dRgb48);
     // TensorRT 10/11 objects are released with delete (destroy() was removed).
@@ -162,28 +172,21 @@ InferenceSession::~InferenceSession() {
     delete _runtime;
 }
 
-auto InferenceSession::Upload(const void *r, const void *g, const void *b, size_t srcStrideBytes) -> bool {
-    // Mark the start of the upload phase on the stream (for the LastGpuTimings() diagnostic).
+auto InferenceSession::UploadYuv420(const void *frame, const Yuv420Conversion &conversion) -> bool {
     cudaEventRecord(_evStart, _stream);
-
-    // Copy each padded-stride planar channel into its (tightly packed) slot of the NCHW input
-    // buffer; cudaMemcpy2DAsync drops the source row padding. From pinned memory these run as
-    // async DMAs that overlap the rest of the stream.
-    const size_t rowBytes = static_cast<size_t>(_inW) * sizeof(unsigned short);
-    const size_t planeBytes = rowBytes * _inH;
-    auto *dst = static_cast<unsigned char *>(_dInput);
-    const void *planes[3] = { r, g, b };
-    for (int p = 0; p < 3; ++p) {
-        if (cudaMemcpy2DAsync(dst + static_cast<size_t>(p) * planeBytes, rowBytes, planes[p], srcStrideBytes,
-                              rowBytes, _inH, cudaMemcpyHostToDevice, _stream) != cudaSuccess) {
-            return false;
-        }
-    }
-    // Apply the [0,1] model-input clamp on the device, so the planar fp16 can be uploaded unclamped.
-    if (LaunchClampHalf01(_dInput, static_cast<size_t>(3) * _inW * _inH, _stream) != cudaSuccess) {
+    const size_t sampleBytes = conversion.format == Yuv420Format::P010 ? 2 : 1;
+    const size_t frameBytes = static_cast<size_t>(_inW) * _inH * 3 / 2 * sampleBytes;
+    if (cudaMemcpyAsync(_dYuv, frame, frameBytes, cudaMemcpyHostToDevice, _stream) != cudaSuccess) {
         return false;
     }
     cudaEventRecord(_evUploaded, _stream);
+    if (LaunchYuv420ToFp16Planar(_dYuv, _dInput, _inW, _inH, conversion, _stream) != cudaSuccess) {
+        return false;
+    }
+    if (LaunchClampHalf01(_dInput, static_cast<size_t>(3) * _inW * _inH, _stream) != cudaSuccess) {
+        return false;
+    }
+    cudaEventRecord(_evPreprocessed, _stream);
     return true;
 }
 
@@ -191,12 +194,13 @@ auto InferenceSession::Infer() -> bool {
     if (!_context->enqueueV3(_stream)) {
         return false;
     }
+    cudaEventRecord(_evInferred, _stream);
     // Convert fp16 planar -> packed RGB48 on the same stream, right after inference, so it overlaps
     // and needs no extra synchronization.
     if (LaunchFp16PlanarToRgb48(_dOutput, _dRgb48, _outW, _outH, _stream) != cudaSuccess) {
         return false;
     }
-    cudaEventRecord(_evInferred, _stream);
+    cudaEventRecord(_evPacked, _stream);
     return true;
 }
 
@@ -213,17 +217,20 @@ auto InferenceSession::Download(void *hostOutput, size_t dstStrideBytes) -> bool
 }
 
 auto InferenceSession::LastGpuTimings(GpuStageTimings &timings) const -> bool {
-    // The stream is synchronized by Download(), so all four markers have completed. Each interval is
-    // the GPU-timeline duration of that phase: upload (H2D + clamp), compute (enqueueV3 + RGB48
-    // kernel), download (D2H copy).
-    float upload = 0, compute = 0, download = 0;
+    // Download() synchronized the stream, so all markers have completed. Adjacent event pairs
+    // isolate H2D, preprocessing, TensorRT, RGB48 packing, and D2H on the GPU timeline.
+    float upload = 0, preprocess = 0, inference = 0, pack = 0, download = 0;
     if (cudaEventElapsedTime(&upload, _evStart, _evUploaded) != cudaSuccess ||
-        cudaEventElapsedTime(&compute, _evUploaded, _evInferred) != cudaSuccess ||
-        cudaEventElapsedTime(&download, _evInferred, _evDownloaded) != cudaSuccess) {
+        cudaEventElapsedTime(&preprocess, _evUploaded, _evPreprocessed) != cudaSuccess ||
+        cudaEventElapsedTime(&inference, _evPreprocessed, _evInferred) != cudaSuccess ||
+        cudaEventElapsedTime(&pack, _evInferred, _evPacked) != cudaSuccess ||
+        cudaEventElapsedTime(&download, _evPacked, _evDownloaded) != cudaSuccess) {
         return false;
     }
     timings.uploadMs = upload;
-    timings.computeMs = compute;
+    timings.preprocessMs = preprocess;
+    timings.inferenceMs = inference;
+    timings.packMs = pack;
     timings.downloadMs = download;
     return true;
 }

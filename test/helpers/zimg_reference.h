@@ -9,7 +9,7 @@ struct zimg_filter_graph;
 
 namespace MLFilter {
 
-// Converts an NV12 or P010 decoded video frame to planar, full-range
+// Test reference: converts an NV12 or P010 decoded video frame to planar, full-range
 // RGB fp16 using zimg with settings: Bicubic Catmull-Rom (b=0, c=0.5) chroma upsampling, the
 // source color matrix and range, left chroma siting, then a clamp to [0,1].
 //

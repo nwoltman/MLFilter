@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{91A97F70-7A31-4B6F-9C61-95E6E631C8D2}</ProjectGuid>
+    <RootNamespace>MLFilterTest</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+  </PropertyGroup>
+  <Import Project="$(SolutionDir)common.props" />
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+    <Import Project="$(SolutionDir)cuda.props" />
+  </ImportGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(SolutionDir)src;$(SolutionDir)deps\zimg\src\zimg\api;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="conversion_tests.cpp" />
+    <ClCompile Include="helpers\zimg_reference.cpp" />
+    <CudaCompile Include="..\src\engine\fp16_kernels.cu" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\src\color\yuv420_format.h" />
+    <ClInclude Include="helpers\zimg_reference.h" />
+    <ClInclude Include="..\src\engine\fp16_kernels.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\deps\zimg\_msvc\zimg\zimg.vcxproj">
+      <Project>{C8629E57-4D6F-40FA-82FC-B39824195932}</Project>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+    <Import Project="$(SolutionDir)cuda.targets" />
+  </ImportGroup>
+</Project>

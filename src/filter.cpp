@@ -126,10 +126,9 @@ auto SelectModel(const Settings &settings, int width, int height) -> const std::
 }
 
 // Maps an internally supported input subtype to the converter's format kind.
-auto KindForSubtype(const GUID &s, YuvToRgbConverter::Kind &kind) -> bool {
-    using K = YuvToRgbConverter::Kind;
-    if (s == FOURCCMap(Fourcc('N', 'V', '1', '2'))) { kind = K::NV12; }
-    else if (s == FOURCCMap(Fourcc('P', '0', '1', '0'))) { kind = K::P010; }
+auto KindForSubtype(const GUID &s, Yuv420Format &kind) -> bool {
+    if (s == FOURCCMap(Fourcc('N', 'V', '1', '2'))) { kind = Yuv420Format::NV12; }
+    else if (s == FOURCCMap(Fourcc('P', '0', '1', '0'))) { kind = Yuv420Format::P010; }
     else { return false; }
     return true;
 }
@@ -542,7 +541,7 @@ auto CMLFilter::SetupProcessor() -> void {
     }
 
     const CMediaType &mt = m_pInput->CurrentMediaType();
-    YuvToRgbConverter::Kind kind = YuvToRgbConverter::Kind::NV12;
+    Yuv420Format kind = Yuv420Format::NV12;
     if (!KindForSubtype(*mt.Subtype(), kind)) {
         return; // unsupported subtype -> pass-through
     }

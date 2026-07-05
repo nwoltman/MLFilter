@@ -8,7 +8,7 @@
 
 #include <windows.h>
 
-#include "color/yuv_to_rgb.h"
+#include "color/yuv420_format.h"
 
 struct IMediaSample;
 
@@ -16,15 +16,14 @@ namespace MLFilter {
 
 class InferenceSession;
 
-// One per pin connection. Owns the zimg converter and the TensorRT session. Process() runs a
-// full frame: YUV -> RGB fp16 (CPU/zimg) -> engine + RGB48 conversion (GPU) -> copy into the
-// output sample.
+// One per pin connection. Uploads compact YUV and performs conversion, inference, and RGB48
+// packing on the GPU before copying the result into the output sample.
 class FrameProcessor {
 public:
     // Builds the session (deserializing the engine) and the converter for the given input
     // format. Returns nullptr on failure; error receives the reason.
     static auto Create(const std::filesystem::path &enginePath,
-                       YuvToRgbConverter::Kind kind,
+                       Yuv420Format format,
                        bool bt709,
                        bool fullRange,
                        std::wstring &error) -> std::unique_ptr<FrameProcessor>;
@@ -46,7 +45,7 @@ private:
     FrameProcessor() = default;
 
     std::unique_ptr<InferenceSession> _session;
-    std::unique_ptr<YuvToRgbConverter> _converter;
+    Yuv420Conversion _conversion {};
 
     int _outW = 0;
     int _outH = 0;

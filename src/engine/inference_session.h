@@ -6,6 +6,8 @@
 #include <memory>
 #include <string>
 
+#include "color/yuv420_format.h"
+
 namespace nvinfer1 {
 class IRuntime;
 class ICudaEngine;
@@ -51,7 +53,11 @@ public:
     // InputWidth()*InputHeight() __half with per-row stride srcStrideBytes (may be padded) — are
     // copied into the engine's tight NCHW input buffer and clamped to [0,1] on the device. The
     // source buffers should be pinned for an async DMA. Returns false on a CUDA error.
-    auto Upload(const void *r, const void *g, const void *b, size_t srcStrideBytes) -> bool;
+
+    // Uploads a compact, tightly packed NV12/P010 frame and performs unpacking, range/depth
+    // normalization, Catmull-Rom chroma reconstruction, matrix conversion, and fp16 packing on
+    // the GPU.
+    auto UploadYuv420(const void *frame, const Yuv420Conversion &conversion) -> bool;
 
     // Runs the network and, on the same stream, the fp16-planar -> packed-RGB48 conversion kernel.
     // Returns false on a CUDA/TensorRT error.
@@ -65,12 +71,13 @@ public:
 
     // GPU-timeline durations (milliseconds) of the last completed Upload/Infer/Download cycle,
     // measured with CUDA events recorded on the stream. Valid only after a Download() has
-    // synchronized the stream. Diagnostic only (used by the benchmark to size multi-stream gains):
-    // upload = H2D copies + clamp, compute = enqueueV3 + RGB48 kernel, download = D2H copy. Returns
-    // false on a CUDA error.
+    // synchronized the stream. The five intervals are H2D upload, YUV preprocessing, TensorRT
+    // inference, RGB48 packing, and D2H download. Returns false on a CUDA error.
     struct GpuStageTimings {
         double uploadMs = 0;
-        double computeMs = 0;
+        double preprocessMs = 0;
+        double inferenceMs = 0;
+        double packMs = 0;
         double downloadMs = 0;
     };
     auto LastGpuTimings(GpuStageTimings &timings) const -> bool;
@@ -83,13 +90,16 @@ private:
     nvinfer1::IExecutionContext *_context = nullptr;
     CUstream_st *_stream = nullptr;
 
-    // Stream markers bracketing the three GPU phases, for the LastGpuTimings() diagnostic.
+    // Stream markers bracketing the five GPU phases reported by LastGpuTimings().
     CUevent_st *_evStart = nullptr;
     CUevent_st *_evUploaded = nullptr;
+    CUevent_st *_evPreprocessed = nullptr;
     CUevent_st *_evInferred = nullptr;
+    CUevent_st *_evPacked = nullptr;
     CUevent_st *_evDownloaded = nullptr;
 
     void *_dInput = nullptr;
+    void *_dYuv = nullptr;
     void *_dOutput = nullptr;
     void *_dRgb48 = nullptr;
 

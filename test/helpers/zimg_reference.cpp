@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-#include "yuv_to_rgb.h"
+#include "zimg_reference.h"
 
 #include <chrono>
 #include <cstdint>

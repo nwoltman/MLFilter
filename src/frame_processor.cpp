@@ -10,7 +10,7 @@
 namespace MLFilter {
 
 auto FrameProcessor::Create(const std::filesystem::path &enginePath,
-                            YuvToRgbConverter::Kind kind,
+                            Yuv420Format format,
                             bool bt709,
                             bool fullRange,
                             std::wstring &error) -> std::unique_ptr<FrameProcessor> {
@@ -21,17 +21,11 @@ auto FrameProcessor::Create(const std::filesystem::path &enginePath,
         return nullptr;
     }
 
-    const YuvToRgbConverter::Params params {
-        .kind = kind,
-        .width = processor->_session->InputWidth(),
-        .height = processor->_session->InputHeight(),
+    processor->_conversion = {
+        .format = format,
         .bt709 = bt709,
         .fullRange = fullRange,
     };
-    processor->_converter = YuvToRgbConverter::Create(params, error);
-    if (!processor->_converter) {
-        return nullptr;
-    }
 
     processor->_outW = processor->_session->OutputWidth();
     processor->_outH = processor->_session->OutputHeight();
@@ -47,12 +41,7 @@ auto FrameProcessor::Process(IMediaSample *in, IMediaSample *out) -> HRESULT {
         return E_FAIL;
     }
 
-    const YuvToRgbConverter::PlanarRgbFp16 *rgb = _converter->Convert(srcBuffer);
-    if (rgb == nullptr) {
-        return E_FAIL;
-    }
-
-    if (!_session->Upload(rgb->r, rgb->g, rgb->b, static_cast<size_t>(rgb->strideBytes)) || !_session->Infer()) {
+    if (!_session->UploadYuv420(srcBuffer, _conversion) || !_session->Infer()) {
         return E_FAIL;
     }
 
