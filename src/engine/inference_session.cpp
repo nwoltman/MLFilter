@@ -183,9 +183,6 @@ auto InferenceSession::UploadYuv420(const void *frame, const Yuv420Conversion &c
     if (LaunchYuv420ToFp16Planar(_dYuv, _dInput, _inW, _inH, conversion, _stream) != cudaSuccess) {
         return false;
     }
-    if (LaunchClampHalf01(_dInput, static_cast<size_t>(3) * _inW * _inH, _stream) != cudaSuccess) {
-        return false;
-    }
     cudaEventRecord(_evPreprocessed, _stream);
     return true;
 }

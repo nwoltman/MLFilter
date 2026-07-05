@@ -22,6 +22,10 @@ constexpr float kBt601GreenFromCb = -0.34413628620102216f;
 constexpr float kBt601GreenFromCr = -0.7141362862010221f;
 constexpr float kBt601BlueFromCb = 1.772f;
 
+__device__ __forceinline__ auto Clamp01(float value) -> float {
+    return fminf(fmaxf(value, 0.0f), 1.0f);
+}
+
 __device__ inline auto MirrorIndex(int i, int length) -> int {
     if (i < 0) {
         return -i - 1;
@@ -128,9 +132,12 @@ __global__ void Yuv420ToFp16PlanarKernel(const T *src, __half *dst, int width, i
     const float gCb = bt709 ? kBt709GreenFromCb : kBt601GreenFromCb;
     const float gCr = bt709 ? kBt709GreenFromCr : kBt601GreenFromCr;
     const float bCb = bt709 ? kBt709BlueFromCb : kBt601BlueFromCb;
-    const float r = fmaf(rCr, cr, yy);
-    const float g = fmaf(gCr, cr, fmaf(gCb, cb, yy));
-    const float b = fmaf(bCb, cb, yy);
+
+    // Clamp final values to the [0,1] range to accommodate models that aren't trained to handle
+    // RGB values outside of that range.
+    const float r = Clamp01(fmaf(rCr, cr, yy));
+    const float g = Clamp01(fmaf(gCr, cr, fmaf(gCb, cb, yy)));
+    const float b = Clamp01(fmaf(bCb, cb, yy));
 
     const size_t plane = static_cast<size_t>(width) * height;
     dst[i] = __float2half_rn(r);
@@ -140,8 +147,7 @@ __global__ void Yuv420ToFp16PlanarKernel(const T *src, __half *dst, int width, i
 
 // fp16 [0,1]-ish -> 16-bit full-range integer. The engine output should sit in [0,1] but clamp
 // defensively before scaling. Rounds to nearest, ties to even (IEEE-754 default, via the
-// __float2uint_rn intrinsic) so the result is bit-identical to zimg's float->uint16 quantization
-// and free of the upward tie bias / double-rounding wart of the old (f*65535 + 0.5) approach.
+// __float2uint_rn intrinsic) so the result is bit-identical to zimg's float->uint16 quantization.
 __device__ inline auto HalfToUnorm16(__half h) -> uint16_t {
     float f = __half2float(h);
     f = fminf(fmaxf(f, 0.0f), 1.0f);
@@ -193,33 +199,6 @@ auto LaunchFp16PlanarToRgb48(const void *dPlanarFp16, void *dPackedRgb48, int wi
     const dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
     Fp16PlanarToRgb48Kernel<<<grid, block, 0, stream>>>(r, g, b, static_cast<uint16_t *>(dPackedRgb48),
                                                         width, height);
-    return cudaGetLastError();
-}
-
-namespace {
-
-// Clamps one fp16 to [0,1] on its raw 16-bit pattern: non-negative halves are monotonic in their
-// bit pattern, so 0x3C00 (==1.0) is the upper bound and any sign-bit-set value is negative -> 0.
-// (+inf/+nan, being > 0x3C00, clamp to 1.0.)
-__global__ void ClampHalf01Kernel(uint16_t *data, size_t count) {
-    const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (i >= count) {
-        return;
-    }
-    const uint16_t h = data[i];
-    if (h & 0x8000u) {
-        data[i] = 0;
-    } else if (h > 0x3C00u) {
-        data[i] = 0x3C00u;
-    }
-}
-
-}
-
-auto LaunchClampHalf01(void *dData, size_t count, cudaStream_t stream) -> cudaError_t {
-    const int block = 256;
-    const size_t grid = (count + block - 1) / block;
-    ClampHalf01Kernel<<<static_cast<unsigned>(grid), block, 0, stream>>>(static_cast<uint16_t *>(dData), count);
     return cudaGetLastError();
 }
 

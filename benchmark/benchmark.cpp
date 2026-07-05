@@ -167,7 +167,7 @@ auto wmain(int argc, wchar_t **argv) -> int {
     wprintf(L"Output: %dx%d\n\n", outW, outH);
     wprintf(L"======================== Results (%d frames) ========================\n", timed);
     wprintf(L"  Stage           avg/frame     share    work\n");
-    wprintf(L"  Upload         %8.3f ms    %5.1f%%    H2D compact YUV\n",
+    wprintf(L"  Upload         %8.3f ms    %5.1f%%    H2D (move frame to GPU)\n",
             ms(uploadSec), pct(uploadSec));
     wprintf(L"  Pre-process    %8.3f ms    %5.1f%%    Unpack/normalize/chroma/YUV-to-RGB/FP16/clamp\n",
             ms(preprocessSec), pct(preprocessSec));
@@ -175,7 +175,7 @@ auto wmain(int argc, wchar_t **argv) -> int {
             ms(inferenceSec), pct(inferenceSec));
     wprintf(L"  FP16 to RGB48  %8.3f ms    %5.1f%%    Planar FP16 to packed RGB48\n",
             ms(packSec), pct(packSec));
-    wprintf(L"  Download       %8.3f ms    %5.1f%%    D2H packed RGB48\n",
+    wprintf(L"  Download       %8.3f ms    %5.1f%%    D2H (get frame from GPU)\n",
             ms(downloadSec), pct(downloadSec));
     wprintf(L"  --------------------------------------------------------------------------\n");
     wprintf(L"  Pipeline       %8.3f ms   %8.1f fps\n",

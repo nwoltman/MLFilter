@@ -167,8 +167,7 @@ auto RunConversionTest(MLFilter::Yuv420Format format, bool bt709, Pattern patter
     };
     const size_t outputSamples = static_cast<size_t>(3) * kWidth * kHeight;
     if (MLFilter::LaunchYuv420ToFp16Planar(
-            deviceInput.data, deviceOutput.data, kWidth, kHeight, conversion, nullptr) != cudaSuccess ||
-        MLFilter::LaunchClampHalf01(deviceOutput.data, outputSamples, nullptr) != cudaSuccess) {
+            deviceInput.data, deviceOutput.data, kWidth, kHeight, conversion, nullptr) != cudaSuccess) {
         printf("CUDA conversion launch failed: %s\n", cudaGetErrorString(cudaGetLastError()));
         return false;
     }

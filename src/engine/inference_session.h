@@ -55,8 +55,8 @@ public:
     // source buffers should be pinned for an async DMA. Returns false on a CUDA error.
 
     // Uploads a compact, tightly packed NV12/P010 frame and performs unpacking, range/depth
-    // normalization, Catmull-Rom chroma reconstruction, matrix conversion, and fp16 packing on
-    // the GPU.
+    // normalization, Catmull-Rom chroma reconstruction, matrix conversion, [0,1] clamping, and
+    // fp16 packing on the GPU.
     auto UploadYuv420(const void *frame, const Yuv420Conversion &conversion) -> bool;
 
     // Runs the network and, on the same stream, the fp16-planar -> packed-RGB48 conversion kernel.
