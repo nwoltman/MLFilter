@@ -60,7 +60,7 @@ Copy-Item $axPath -Destination $OutputDir
 
 Write-Step "Copying benchmark"
 Copy-Item $benchmarkPath -Destination $binDir
-Copy-Item (Join-Path $PSScriptRoot "run_benchmark.bat") -Destination $OutputDir
+Copy-Item (Join-Path $PSScriptRoot "release-scripts\run_benchmark.bat") -Destination $OutputDir
 
 Write-Step "Creating release README.md"
 $sourceReadme = Get-Content (Join-Path $PSScriptRoot "README.md") -Raw
@@ -86,108 +86,20 @@ foreach ($dll in Get-ChildItem (Join-Path $trtBin "*.dll")) {
 Write-Host ("    {0} TensorRT DLL(s) copied" -f $copied)
 
 Write-Step "Writing installer scripts"
-$installBat = @'
-@echo off
-setlocal
-rem Downloads this release's GPU-specific dependency, then registers MLFilter.
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install_dependency.ps1"
-if errorlevel 1 (
-    echo.
-    echo Installation stopped because the GPU dependency could not be installed.
-    pause
-    exit /b 1
-)
-net session >nul 2>&1
-if %errorlevel% neq 0 (
-    echo Requesting administrator privileges...
-    powershell -NoProfile -Command "Start-Process -Verb RunAs -FilePath '%~f0'"
-    exit /b
-)
-echo Registering MLFilter...
-regsvr32 "%~dp0MLFilter_x64.ax"
-echo.
-echo NOTE: keep this folder where it is. Registration records the .ax's location,
-echo so moving the folder will break the filter (just re-run install.bat after moving).
-pause
-'@
+$releaseScriptsDir = Join-Path $PSScriptRoot "release-scripts"
+Copy-Item (Join-Path $releaseScriptsDir "install.bat") -Destination $OutputDir
+Copy-Item (Join-Path $releaseScriptsDir "uninstall.bat") -Destination $OutputDir
 
-$dependencyScript = @'
-$ErrorActionPreference = "Stop"
-$releaseTag = "__RELEASE_TAG__"
-$repository = "__REPOSITORY__"
-$supportedArchitectures = @("__ARCHITECTURES__")
-$architectureAssets = @{
-__ASSET_MAP__
-}
-try {
-    if (-not $releaseTag) {
-        throw "This folder was made by a dry run and is not tied to a GitHub release. Run make_release.ps1 with a semantic version to create an installable release."
-    }
-    $nvidiaSmi = Get-Command "nvidia-smi.exe" -ErrorAction SilentlyContinue
-    if (-not $nvidiaSmi) {
-        $standardPath = Join-Path $env:ProgramFiles "NVIDIA Corporation\NVSMI\nvidia-smi.exe"
-        if (Test-Path $standardPath) { $nvidiaSmi = Get-Item $standardPath }
-    }
-    if (-not $nvidiaSmi) { throw "nvidia-smi.exe was not found. Install a current NVIDIA display driver." }
-
-    $computeCapabilities = @(& $nvidiaSmi.Source --query-gpu=compute_cap --format=csv,noheader 2>&1)
-    if ($LASTEXITCODE -ne 0) { throw "nvidia-smi could not query GPU compute capabilities: $($computeCapabilities -join ' ')" }
-    $architectures = @($computeCapabilities |
-        ForEach-Object { "sm" + (($_.ToString().Trim()) -replace '\.', '') } |
-        Sort-Object -Unique)
-    $unsupported = @($architectures | Where-Object { $_ -notin $supportedArchitectures })
-    if ($unsupported.Count) {
-        throw "Unsupported NVIDIA GPU architecture(s): $($unsupported -join ', '). Supported: $($supportedArchitectures -join ', ')."
-    }
-
-    $binDir = Join-Path $PSScriptRoot "bin"
-    New-Item -ItemType Directory -Path $binDir -Force | Out-Null
-    foreach ($architecture in $architectures) {
-        $assetName = $architectureAssets[$architecture]
-        $destination = Join-Path $binDir $assetName
-        if ((Test-Path $destination) -and (Get-Item $destination).Length -gt 0) {
-            Write-Host "$assetName is already installed."
-            continue
-        }
-        $uri = "https://github.com/$repository/releases/download/$releaseTag/$assetName"
-        Write-Host "Downloading $assetName for $architecture..."
-        $temporary = "$destination.download"
-        try {
-            Invoke-WebRequest -UseBasicParsing -Uri $uri -OutFile $temporary
-            Move-Item -Force $temporary $destination
-        } finally {
-            Remove-Item $temporary -Force -ErrorAction SilentlyContinue
-        }
-    }
-} catch {
-    Write-Error $_
-    exit 1
-}
-'@
+$dependencyScript = Get-Content (Join-Path $releaseScriptsDir "install_dependency.ps1") -Raw
 $dependencyScript = $dependencyScript.Replace("__RELEASE_TAG__", $ReleaseTag)
 $dependencyScript = $dependencyScript.Replace("__REPOSITORY__", $Repository)
 $dependencyScript = $dependencyScript.Replace("__ARCHITECTURES__", ($ConsumerArchitectures -join '","'))
 $assetMap = ($ConsumerArchitectures | ForEach-Object {
     '    "{0}" = "{1}"' -f $_, $architectureDlls[$_].Name
 }) -join [Environment]::NewLine
-$dependencyScript = $dependencyScript.Replace("__ASSET_MAP__", $assetMap)
+$dependencyScript = $dependencyScript.Replace("    # __ASSET_MAP__", $assetMap)
 
-$uninstallBat = @'
-@echo off
-rem Unregisters MLFilter.
-net session >nul 2>&1
-if %errorlevel% neq 0 (
-    echo Requesting administrator privileges...
-    powershell -NoProfile -Command "Start-Process -Verb RunAs -FilePath '%~f0'"
-    exit /b
-)
-echo Unregistering MLFilter...
-regsvr32 /u "%~dp0MLFilter_x64.ax"
-pause
-'@
-Set-Content (Join-Path $OutputDir "install.bat") $installBat -Encoding Ascii
 Set-Content (Join-Path $OutputDir "install_dependency.ps1") $dependencyScript -Encoding Ascii
-Set-Content (Join-Path $OutputDir "uninstall.bat") $uninstallBat -Encoding Ascii
 
 $totalBytes = (Get-ChildItem $OutputDir -Recurse -File | Measure-Object Length -Sum).Sum
 $binCount = (Get-ChildItem $binDir -File).Count
