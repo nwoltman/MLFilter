@@ -49,9 +49,10 @@ private:
     auto ReleaseOutputRegistrations() -> void;
 
     // Builds (if not already cached), deserializes, and wires the conversion pipeline for the
-    // connected input.
-    // A null processor means the filter cannot operate and must remove itself from the graph.
-    auto SetupProcessorForInput() -> void;
+    // connected input. Returns S_FALSE when the filter should remove itself from the graph.
+    auto SetupProcessorForInput() -> HRESULT;
+
+    auto ReportEngineBuildFailure(const std::wstring &details) -> void;
 
     // True if the model selected for the current resolution is available, the input passes
     // the optional 1080p limit, and the playing file matches the configured glob filter.

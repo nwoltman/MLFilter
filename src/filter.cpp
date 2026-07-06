@@ -511,7 +511,11 @@ auto CMLFilter::CompleteConnect(PIN_DIRECTION direction, IPin *pReceivePin) -> H
             _processor.reset();
             return S_OK;
         }
-        SetupProcessorForInput();
+
+        const HRESULT setupHr = SetupProcessorForInput();
+        if (FAILED(setupHr)) {
+            return setupHr;
+        }
         if (_processor == nullptr) {
             ScheduleSelfRemoval();
         }
@@ -545,16 +549,16 @@ auto CMLFilter::ReleaseOutputRegistrations() -> void {
     }
 }
 
-auto CMLFilter::SetupProcessorForInput() -> void {
+auto CMLFilter::SetupProcessorForInput() -> HRESULT {
     _processor.reset();
 
     if (m_pInput == nullptr) {
-        return;
+        return S_FALSE;
     }
 
     InputConfig config;
     if (!ResolveInputConfig(m_pInput->CurrentMediaType(), config)) {
-        return;
+        return S_FALSE;
     }
 
     TensorRTEngineBuilder builder;
@@ -572,23 +576,24 @@ auto CMLFilter::SetupProcessorForInput() -> void {
 
         if (result.success) {
             window.Log(L"Engine ready. Starting playback...");
+            Sleep(600);
         } else {
-            window.Log(L"Engine build failed; the video will play without processing.");
+            window.Log(L"Engine build failed; playback will stop.");
             window.Log(result.message);
         }
 
-        Sleep(result.success ? 600 : 2500);
         window.Close();
 
         if (!result.success) {
-            return;
+            ReportEngineBuildFailure(result.message);
+            return E_FAIL;
         }
     }
 
     const CMediaType &mt = m_pInput->CurrentMediaType();
     Yuv420Format kind = Yuv420Format::NV12;
     if (!KindForSubtype(*mt.Subtype(), kind)) {
-        return;
+        return S_FALSE;
     }
     bool bt709 = false;
     bool fullRange = false;
@@ -596,6 +601,21 @@ auto CMLFilter::SetupProcessorForInput() -> void {
 
     std::wstring error;
     _processor = FrameProcessor::Create(builder.EnginePath(request), kind, bt709, fullRange, error);
+    return _processor != nullptr ? S_OK : S_FALSE;
+}
+
+auto CMLFilter::ReportEngineBuildFailure(const std::wstring &details) -> void {
+    std::wstring message =
+        L"MLFilter could not build the TensorRT engine for this video.\n\n"
+        L"Playback will stop.";
+    if (!details.empty()) {
+        message += L"\n\n";
+        message += details;
+    }
+
+    MessageBoxW(nullptr, message.c_str(), L"MLFilter - Engine Build Failed",
+                MB_OK | MB_ICONERROR | MB_TOPMOST | MB_SETFOREGROUND | MB_TASKMODAL);
+    NotifyEvent(EC_ERRORABORT, E_FAIL, 0);
 }
 
 // Remove the filter when the selected model is unavailable, the resolution is above
