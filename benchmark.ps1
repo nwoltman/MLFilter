@@ -14,7 +14,7 @@ param(
     [string]$Format = "nv12",
 
     # ONNX model to build the engine from. Empty -> use the model configured in MLFilter's
-    # settings (HKCU\Software\MLFilter\HdModelPath), same as the filter does during playback.
+    # settings (HKCU\Software\MLFilter\HDModelPath), same as the filter does during playback.
     [string]$Model = "",
 
     [int]$Frames = 300,   # frames to time after warmup

@@ -13,8 +13,8 @@ inline constexpr const WCHAR *SETTINGS_PAGE_NAME = L"MLFilter Settings";
 // HKCU\Software\MLFilter
 inline constexpr const WCHAR *REGISTRY_KEY_NAME = L"Software\\MLFilter";
 
-inline constexpr const WCHAR *SETTING_HD_MODEL_PATH = L"HdModelPath";
-inline constexpr const WCHAR *SETTING_SD_MODEL_PATH = L"SdModelPath";
+inline constexpr const WCHAR *SETTING_HD_MODEL_PATH = L"HDModelPath";
+inline constexpr const WCHAR *SETTING_SD_MODEL_PATH = L"SDModelPath";
 inline constexpr const WCHAR *SETTING_FILE_GLOBS = L"FileGlobs";
 inline constexpr const WCHAR *SETTING_ONLY_RUN_1080P_OR_LOWER = L"OnlyRun1080pOrLower";
 
