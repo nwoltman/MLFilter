@@ -83,14 +83,14 @@ zip-package approach below before building.
 
 ### Visual Studio Project
 
-The build reads `$(TENSORRT_ROOT)` and `$(CUDA_PATH)` (see `tensorrt.props`):
+The build reads `$(TENSORRT_ROOT)` and `$(CUDA_PATH)` (see `config/tensorrt.props`):
 
 - Include directories: `$(TENSORRT_ROOT)\include`, `$(CUDA_PATH)\include`
 - Library directories: `$(TENSORRT_ROOT)\lib`, `$(CUDA_PATH)\lib\x64`
 - Link libraries: `nvinfer_11.lib`, `nvonnxparser_11.lib`, `cudart.lib`, `nvml.lib`
 
 If you install a different TensorRT major version, update the `TensorRtLibSuffix` property in
-`tensorrt.props` (e.g. `_11`) to match the import-lib suffix in `$(TENSORRT_ROOT)\lib`.
+`config/tensorrt.props` (e.g. `_11`) to match the import-lib suffix in `$(TENSORRT_ROOT)\lib`.
 
 ## Building
 

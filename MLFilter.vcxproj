@@ -18,11 +18,11 @@
   <PropertyGroup Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
   </PropertyGroup>
-  <Import Project="$(SolutionDir)common.props" />
-  <Import Project="$(SolutionDir)tensorrt.props" />
+  <Import Project="$(SolutionDir)config\common.props" />
+  <Import Project="$(SolutionDir)config\tensorrt.props" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
-    <Import Project="$(SolutionDir)cuda.props" />
+    <Import Project="$(SolutionDir)config\cuda.props" />
   </ImportGroup>
   <PropertyGroup>
     <TargetExt>.ax</TargetExt>
@@ -88,6 +88,6 @@
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
-    <Import Project="$(SolutionDir)cuda.targets" />
+    <Import Project="$(SolutionDir)config\cuda.targets" />
   </ImportGroup>
 </Project>

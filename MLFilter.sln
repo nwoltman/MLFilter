@@ -9,7 +9,7 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "baseclasses", "deps\basecla
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "zimg", "deps\zimg\_msvc\zimg\zimg.vcxproj", "{C8629E57-4D6F-40FA-82FC-B39824195932}"
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "benchmark", "benchmark.vcxproj", "{2B7E4C19-9F3A-4D6E-A1C2-7F0B5E8D3A14}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "benchmark", "benchmark\benchmark.vcxproj", "{2B7E4C19-9F3A-4D6E-A1C2-7F0B5E8D3A14}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "test", "test\test.vcxproj", "{91A97F70-7A31-4B6F-9C61-95E6E631C8D2}"
 EndProject
