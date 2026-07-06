@@ -162,6 +162,7 @@ auto wmain(int argc, wchar_t **argv) -> int {
     const auto pct = [&](double seconds) {
         return pipelineSec > 0 ? seconds / pipelineSec * 100.0 : 0.0;
     };
+    wprintf(L"ONNX model: %ls\n", modelPath.c_str());
     wprintf(L"Input: %dx%d %ls, %ls limited\n", args.width, args.height,
             depth == 10 ? L"P010" : L"NV12", conversion.bt709 ? L"BT.709" : L"BT.601");
     wprintf(L"Output: %dx%d\n\n", outW, outH);
