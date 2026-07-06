@@ -31,6 +31,10 @@ $axPath = Join-Path $PSScriptRoot "x64\$Configuration\MLFilter_x64.ax"
 if (-not (Test-Path $axPath)) {
     throw "Build completed without producing the expected filter: $axPath"
 }
+$benchmarkPath = Join-Path $PSScriptRoot "x64\$Configuration\benchmark_x64.exe"
+if (-not (Test-Path $benchmarkPath)) {
+    throw "Build completed without producing the expected benchmark: $benchmarkPath"
+}
 
 $trtBin = Join-Path $env:TENSORRT_ROOT "bin"
 if (-not (Test-Path $trtBin)) { throw "TensorRT bin folder not found: $trtBin" }
@@ -53,6 +57,10 @@ New-Item -ItemType Directory -Path $binDir -Force | Out-Null
 
 Write-Step "Copying MLFilter_x64.ax"
 Copy-Item $axPath -Destination $OutputDir
+
+Write-Step "Copying benchmark"
+Copy-Item $benchmarkPath -Destination $binDir
+Copy-Item (Join-Path $PSScriptRoot "run_benchmark.bat") -Destination $OutputDir
 
 Write-Step "Creating release README.md"
 $sourceReadme = Get-Content (Join-Path $PSScriptRoot "README.md") -Raw
@@ -185,7 +193,7 @@ $totalBytes = (Get-ChildItem $OutputDir -Recurse -File | Measure-Object Length -
 $binCount = (Get-ChildItem $binDir -File).Count
 Write-Host ""
 Write-Step "Release folder ready: $OutputDir"
-Write-Host ("    bin\ DLLs : {0} (GPU architecture DLLs excluded)" -f $binCount)
+Write-Host ("    bin\ files: {0} (GPU architecture DLLs excluded)" -f $binCount)
 Write-Host ("    Total size: {0:N1} MB" -f ($totalBytes / 1MB))
 
 if (-not $Version) {

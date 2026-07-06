@@ -21,6 +21,11 @@ The filter is mainly intended to be used to upscale video with models like the
   the HD model is used. With neither model configured, the filter removes itself from the graph.
 - Press `Ctrl+Alt+J` to show the MLFilter Debug overlay when playing a video
 
+### Running the benchmark
+
+After installing MLFilter and configuring an HD model, run `run_benchmark.bat` from the release
+folder. It benchmarks 1920x1080 and 1280x720 resolutions.
+
 ## System requirements
 
 You need:
@@ -146,8 +151,11 @@ release\
   MLFilter_x64.ax          the filter
   install.bat              registers the filter (run as administrator)
   install_dependency.ps1   downloads the correct GPU architecture DLL
+  run_benchmark.bat        runs the standard benchmark matrix
   uninstall.bat            unregisters the filter
-  bin\                     architecture-independent TensorRT DLLs
+  bin\
+    benchmark_x64.exe      standalone benchmark
+    *.dll                  architecture-independent TensorRT DLLs
 ```
 
 The TensorRT DLLs are delay-loaded and `DllMain` prepends this `bin\` folder to the process
