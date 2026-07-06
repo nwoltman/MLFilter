@@ -13,6 +13,8 @@
 
 namespace MLFilter {
 
+class MLFilterOutputPin;
+
 // Copy transform: converts a supported 4:2:0 YUV input frame to RGB, runs the TensorRT engine, and
 // emits RGB48 downstream (a different pixel format and possibly a larger resolution than the
 // input, which is why this is a copy transform rather than transform-in-place).
@@ -30,6 +32,7 @@ public:
 
     // CTransformFilter
     auto CheckInputType(const CMediaType *mtIn) -> HRESULT override;
+    auto GetPin(int n) -> CBasePin * override;
     auto CheckTransform(const CMediaType *mtIn, const CMediaType *mtOut) -> HRESULT override;
     auto GetMediaType(int iPosition, CMediaType *pMediaType) -> HRESULT override;
     auto DecideBufferSize(IMemAllocator *pAlloc, ALLOCATOR_PROPERTIES *pProps) -> HRESULT override;
@@ -41,6 +44,10 @@ public:
     auto STDMETHODCALLTYPE GetPages(CAUUID *pPages) -> HRESULT override;
 
 private:
+    friend class MLFilterOutputPin;
+
+    auto ReleaseOutputRegistrations() -> void;
+
     // Builds (if not already cached) the engine matching the connected input's resolution,
     // showing a progress window during the build.
     auto EnsureEngineForInput() -> void;

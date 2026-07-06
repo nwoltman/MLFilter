@@ -132,13 +132,15 @@ auto wmain(int argc, wchar_t **argv) -> int {
     };
 
     double pipelineSec = 0;
-    double uploadSec = 0, preprocessSec = 0, inferenceSec = 0, packSec = 0, downloadSec = 0;
+    double uploadSec = 0, preprocessSec = 0, inferenceSec = 0, packSec = 0;
+    double downloadSec = 0, outputRegistrationSec = 0;
     int warmed = 0, timed = 0;
     while (warmed + timed < args.warmup + args.frames) {
         const bool timing = warmed >= args.warmup;
         const auto begin = Clock::now();
         if (!session->UploadYuv420(frame.data(), conversion) || !session->Infer() ||
-            !session->Download(output.data(), static_cast<size_t>(outW) * 6)) {
+            !session->Download(output.data(), static_cast<size_t>(outW) * 6,
+                               output.size() * sizeof(uint16_t))) {
             wprintf(L"Inference failed.\n");
             return 1;
         }
@@ -152,6 +154,7 @@ auto wmain(int argc, wchar_t **argv) -> int {
                 inferenceSec += gpu.inferenceMs / 1000.0;
                 packSec += gpu.packMs / 1000.0;
                 downloadSec += gpu.downloadMs / 1000.0;
+                outputRegistrationSec += gpu.outputRegistrationMs / 1000.0;
             }
             ++timed;
         } else ++warmed;
@@ -178,6 +181,8 @@ auto wmain(int argc, wchar_t **argv) -> int {
             ms(packSec), pct(packSec));
     wprintf(L"  Download       %8.3f ms    %5.1f%%    D2H (get frame from GPU)\n",
             ms(downloadSec), pct(downloadSec));
+    wprintf(L"  Pin/unpin      %8.3f ms    %5.1f%%    Register output for direct DMA\n",
+            ms(outputRegistrationSec), pct(outputRegistrationSec));
     wprintf(L"  --------------------------------------------------------------------------\n");
     wprintf(L"  Pipeline       %8.3f ms   %8.1f fps\n",
             ms(pipelineSec), fps(pipelineSec));

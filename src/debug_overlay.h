@@ -9,7 +9,9 @@
 namespace MLFilter {
 
 struct DebugOverlayTimings {
-    double uploadMs, preprocessMs, inferenceMs, packMs, downloadMs;
+    double uploadMs, preprocessMs, inferenceMs, packMs, downloadMs, outputRegistrationMs;
+    size_t outputCacheSize, outputCacheCapacity;
+    uint64_t outputTransientTransfers, outputRegistrationFailures;
 };
 
 class DebugOverlay {
@@ -21,11 +23,11 @@ public:
               const DebugOverlayTimings &timings) -> void;
 
 private:
-    std::array<double, 6> _averageSums {};
-    std::array<double, 6> _displayedAverages {};
+    std::array<double, 7> _averageSums {};
+    std::array<double, 7> _displayedAverages {};
     size_t _averageCount = 0;
-    std::array<double, 6> _maximums {};
-    std::array<double, 6> _displayedMaximums {};
+    std::array<double, 7> _maximums {};
+    std::array<double, 7> _displayedMaximums {};
     size_t _maximumUpdateCount = 0;
     std::string _engineLine;
     std::string _inputLine;

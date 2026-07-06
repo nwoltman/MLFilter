@@ -2,9 +2,11 @@
 
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "color/yuv420_format.h"
 
@@ -63,11 +65,20 @@ public:
     // Returns false on a CUDA/TensorRT error.
     auto Infer() -> bool;
 
-    // Copies the packed, top-down RGB48 result from the device into hostOutput, writing each row
-    // at dstStrideBytes (the renderer allocator's row pitch, which may exceed width*6). Blocks
-    // until the whole stream (upload, inference, conversion, copy) has completed. Returns false on
-    // a CUDA error.
-    auto Download(void *hostOutput, size_t dstStrideBytes) -> bool;
+    // Registers each new renderer allocator buffer for direct DMA, then copies the
+    // packed, top-down RGB48 result into it at dstStrideBytes (which may exceed width*6). Blocks
+    // until the whole stream has completed. Registration failure falls back to pageable transfer.
+    auto Download(void *hostOutput, size_t dstStrideBytes, size_t hostBufferBytes) -> bool;
+
+    auto UnregisterOutputBuffers() -> void;
+
+    struct OutputCacheStatus {
+        size_t cached = 0;
+        size_t capacity = 0;
+        uint64_t transientTransfers = 0;
+        uint64_t registrationFailures = 0;
+    };
+    auto GetOutputCacheStatus() const -> OutputCacheStatus;
 
     // GPU-timeline durations (milliseconds) of the last completed Upload/Infer/Download cycle,
     // measured with CUDA events recorded on the stream. Valid only after a Download() has
@@ -79,6 +90,7 @@ public:
         double inferenceMs = 0;
         double packMs = 0;
         double downloadMs = 0;
+        double outputRegistrationMs = 0;
     };
     auto LastGpuTimings(GpuStageTimings &timings) const -> bool;
 
@@ -102,6 +114,17 @@ private:
     void *_dYuv = nullptr;
     void *_dOutput = nullptr;
     void *_dRgb48 = nullptr;
+
+    double _outputRegistrationMs = 0;
+
+    struct HostRegistration {
+        void *address = nullptr;
+        bool registered = false;
+    };
+    std::vector<HostRegistration> _hostRegistrations;
+    static constexpr size_t kMaxCachedRegistrations = 32;
+    uint64_t _outputTransientTransfers = 0;
+    uint64_t _outputRegistrationFailures = 0;
 
     std::string _inputName;
     std::string _outputName;

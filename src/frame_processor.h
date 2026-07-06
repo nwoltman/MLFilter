@@ -42,6 +42,8 @@ public:
     // timestamps/flags — the caller copies those. Returns an HRESULT.
     auto Process(IMediaSample *in, IMediaSample *out, bool showDebugOverlay) -> HRESULT;
 
+    auto UnregisterOutputBuffers() -> void;
+
 private:
     FrameProcessor() = default;
 

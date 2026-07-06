@@ -15,6 +15,7 @@
 #include "constants.h"
 #include "formats.h"
 #include "guids.h"
+#include "output_pin.h"
 #include "progress_window.h"
 #include "settings.h"
 #include "engine/engine_builder.h"
@@ -389,6 +390,37 @@ auto CMLFilter::DecideBufferSize(IMemAllocator *pAlloc, ALLOCATOR_PROPERTIES *pP
     return actual.cbBuffer >= requiredSize ? S_OK : E_FAIL;
 }
 
+auto CMLFilter::GetPin(int n) -> CBasePin * {
+    HRESULT hr = S_OK;
+
+    if (m_pInput == nullptr) {
+        m_pInput = new CTransformInputPin(
+            NAME("Transform input pin"), this, &hr, L"XForm In");
+        if (m_pInput == nullptr || FAILED(hr)) {
+            delete m_pInput;
+            m_pInput = nullptr;
+            return nullptr;
+        }
+
+        m_pOutput = new MLFilterOutputPin(this, &hr);
+        if (m_pOutput == nullptr || FAILED(hr)) {
+            delete m_pOutput;
+            m_pOutput = nullptr;
+            delete m_pInput;
+            m_pInput = nullptr;
+            return nullptr;
+        }
+    }
+
+    if (n == 0) {
+        return m_pInput;
+    }
+    if (n == 1) {
+        return m_pOutput;
+    }
+    return nullptr;
+}
+
 auto CMLFilter::Transform(IMediaSample *pIn, IMediaSample *pOut) -> HRESULT {
     CheckPointer(pIn, E_POINTER);
     CheckPointer(pOut, E_POINTER);
@@ -477,6 +509,12 @@ auto CMLFilter::BreakConnect(PIN_DIRECTION direction) -> HRESULT {
         _inputFormatDescription.clear();
     }
     return CTransformFilter::BreakConnect(direction);
+}
+
+auto CMLFilter::ReleaseOutputRegistrations() -> void {
+    if (_processor != nullptr) {
+        _processor->UnregisterOutputBuffers();
+    }
 }
 
 auto CMLFilter::EnsureEngineForInput() -> void {

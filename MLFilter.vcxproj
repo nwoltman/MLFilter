@@ -44,6 +44,7 @@
     <ClInclude Include="src\formats.h" />
     <ClInclude Include="src\frame_processor.h" />
     <ClInclude Include="src\hotkey_listener.h" />
+    <ClInclude Include="src\output_pin.h" />
     <ClInclude Include="src\color\yuv420_format.h" />
     <ClInclude Include="src\engine\inference_session.h" />
     <ClInclude Include="src\guids.h" />
@@ -68,6 +69,7 @@
     <ClCompile Include="src\formats.cpp" />
     <ClCompile Include="src\frame_processor.cpp" />
     <ClCompile Include="src\hotkey_listener.cpp" />
+    <ClCompile Include="src\output_pin.cpp" />
     <ClCompile Include="src\engine\inference_session.cpp" />
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\progress_window.cpp" />

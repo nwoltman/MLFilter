@@ -85,9 +85,10 @@ auto DebugOverlay::SetStreamInfo(std::string engineFileName, int inputWidth, int
 auto DebugOverlay::Draw(uint8_t *frame, size_t stride, int width, int height,
                         const DebugOverlayTimings &t) -> void {
     const double pipeline = t.uploadMs + t.preprocessMs + t.inferenceMs +
-                            t.packMs + t.downloadMs;
-    const std::array<double, 6> current {
-        t.uploadMs, t.preprocessMs, t.inferenceMs, t.packMs, t.downloadMs, pipeline
+                            t.packMs + t.downloadMs + t.outputRegistrationMs;
+    const std::array<double, 7> current {
+        t.uploadMs, t.preprocessMs, t.inferenceMs, t.packMs, t.downloadMs,
+        t.outputRegistrationMs, pipeline
     };
 
     for (size_t i = 0; i < current.size(); ++i) {
@@ -122,32 +123,40 @@ auto DebugOverlay::Draw(uint8_t *frame, size_t stride, int width, int height,
     }
 
     constexpr int glyphAdvance = 6 * 3;
-    const size_t longestLine = std::max<size_t>(_engineLine.size(), 42);
+    const size_t longestLine = std::max<size_t>(_engineLine.size(), 76);
     const int desiredPanelWidth = 16 + static_cast<int>(longestLine) * glyphAdvance;
     const int panelWidth = std::min(width, desiredPanelWidth);
-    const int panelHeight = std::min(height, 368);
+    const int panelHeight = std::min(height, 428);
 
     for (int y = 0; y < panelHeight; ++y) {
         std::memset(frame + static_cast<size_t>(y) * stride, 0,
                     static_cast<size_t>(panelWidth) * 3 * sizeof(uint16_t));
     }
 
-    constexpr std::array<std::string_view, 6> labels {
-        "UPLOAD", "PRE-PROCESS", "INFERENCE", "FP16 TO RGB48", "DOWNLOAD", "PIPELINE"
+    constexpr std::array<std::string_view, 7> labels {
+        "UPLOAD", "PRE-PROCESS", "INFERENCE", "FP16 TO RGB48",
+        "DOWNLOAD", "PIN/UNPIN", "PIPELINE"
     };
 
-    char line[96] {};
+    char line[128] {};
     DrawText(frame, stride, width, height, 8, 8, "MLFILTER DEBUG");
     // One blank text row separates the heading from the stream information.
     DrawText(frame, stride, width, height, 8, 68, _engineLine);
     DrawText(frame, stride, width, height, 8, 98, _inputLine);
     DrawText(frame, stride, width, height, 8, 128, _outputLine);
 
-    // A second blank row separates stream information from the live metrics.
+    std::snprintf(line, sizeof(line),
+                  "DMA CACHE: %zu/%zu  TRANS %llu  FAIL %llu",
+                  t.outputCacheSize, t.outputCacheCapacity,
+                  static_cast<unsigned long long>(t.outputTransientTransfers),
+                  static_cast<unsigned long long>(t.outputRegistrationFailures));
+    DrawText(frame, stride, width, height, 8, 158, line);
+
+    // A blank row separates stream information from the live metrics.
     for (size_t i = 0; i < labels.size(); ++i) {
         std::snprintf(line, sizeof(line), "%-14s %7.3F MS (MAX %.3F)",
                       labels[i].data(), _displayedAverages[i], _displayedMaximums[i]);
-        DrawText(frame, stride, width, height, 8, 188 + static_cast<int>(i) * 30, line);
+        DrawText(frame, stride, width, height, 8, 218 + static_cast<int>(i) * 30, line);
     }
 }
 

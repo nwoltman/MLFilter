@@ -85,21 +85,31 @@ auto FrameProcessor::Process(IMediaSample *in, IMediaSample *out, bool showDebug
 
     // The engine output is converted to packed, top-down RGB48 on the GPU; this copies it into the
     // output sample, expanding each row to the allocator's row pitch.
-    if (!_session->Download(dstBuffer, static_cast<size_t>(stride))) {
+    const size_t bufferBytes = bufSize > 0
+        ? static_cast<size_t>(bufSize)
+        : static_cast<size_t>(stride) * _outH;
+    if (!_session->Download(dstBuffer, static_cast<size_t>(stride), bufferBytes)) {
         return E_FAIL;
     }
 
     if (showDebugOverlay) {
         InferenceSession::GpuStageTimings gpu {};
         if (_session->LastGpuTimings(gpu)) {
+            const auto cache = _session->GetOutputCacheStatus();
             _debugOverlay.Draw(dstBuffer, static_cast<size_t>(stride), _outW, _outH,
                                {gpu.uploadMs, gpu.preprocessMs, gpu.inferenceMs,
-                                gpu.packMs, gpu.downloadMs});
+                                gpu.packMs, gpu.downloadMs, gpu.outputRegistrationMs,
+                                cache.cached, cache.capacity, cache.transientTransfers,
+                                cache.registrationFailures});
         }
     }
 
     out->SetActualDataLength(stride * _outH);
     return S_OK;
+}
+
+auto FrameProcessor::UnregisterOutputBuffers() -> void {
+    _session->UnregisterOutputBuffers();
 }
 
 }

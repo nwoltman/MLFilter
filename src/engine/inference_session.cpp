@@ -2,6 +2,8 @@
 
 #include "inference_session.h"
 
+#include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <fstream>
 #include <vector>
@@ -141,6 +143,8 @@ auto InferenceSession::Create(const std::filesystem::path &enginePath, std::wstr
 }
 
 InferenceSession::~InferenceSession() {
+    UnregisterOutputBuffers();
+
     if (_evStart != nullptr) {
         cudaEventDestroy(_evStart);
     }
@@ -201,16 +205,81 @@ auto InferenceSession::Infer() -> bool {
     return true;
 }
 
-auto InferenceSession::Download(void *hostOutput, size_t dstStrideBytes) -> bool {
+auto InferenceSession::Download(void *hostOutput, size_t dstStrideBytes, size_t hostBufferBytes) -> bool {
     // The packed RGB48 result is tightly stored (width*3 uint16 per row); copy it straight into the
     // output sample, expanding each row to the allocator's (possibly padded) destination pitch.
-    const size_t rowBytes = static_cast<size_t>(_outW) * 3 * sizeof(uint16_t);
-    if (cudaMemcpy2DAsync(hostOutput, dstStrideBytes, _dRgb48, rowBytes, rowBytes, _outH,
-                          cudaMemcpyDeviceToHost, _stream) != cudaSuccess) {
-        return false;
+    const auto registrationBegin = std::chrono::steady_clock::now();
+    bool registeredOutput = false;
+    bool transientRegistration = false;
+
+    if (hostBufferBytes >= dstStrideBytes * static_cast<size_t>(_outH)) {
+        const auto cached = std::find_if(
+            _hostRegistrations.begin(), _hostRegistrations.end(),
+            [hostOutput](const HostRegistration &item) { return item.address == hostOutput; });
+        if (cached != _hostRegistrations.end()) {
+            registeredOutput = cached->registered;
+        } else {
+            const cudaError_t result =
+                cudaHostRegister(hostOutput, hostBufferBytes, cudaHostRegisterDefault);
+            registeredOutput = result == cudaSuccess;
+
+            if (registeredOutput) {
+                if (_hostRegistrations.size() < kMaxCachedRegistrations) {
+                    _hostRegistrations.push_back({hostOutput, true});
+                } else {
+                    transientRegistration = true;
+                    ++_outputTransientTransfers;
+                }
+            } else {
+                ++_outputRegistrationFailures;
+            }
+        }
     }
-    cudaEventRecord(_evDownloaded, _stream);
-    return cudaStreamSynchronize(_stream) == cudaSuccess;
+
+    const auto registrationEnd = std::chrono::steady_clock::now();
+    _outputRegistrationMs =
+        std::chrono::duration<double, std::milli>(registrationEnd - registrationBegin).count();
+    const size_t rowBytes = static_cast<size_t>(_outW) * 3 * sizeof(uint16_t);
+    const bool copyQueued =
+        cudaMemcpy2DAsync(hostOutput, dstStrideBytes, _dRgb48, rowBytes, rowBytes, _outH,
+                          cudaMemcpyDeviceToHost, _stream) == cudaSuccess;
+    bool synchronized = false;
+    if (copyQueued) {
+        cudaEventRecord(_evDownloaded, _stream);
+        synchronized = cudaStreamSynchronize(_stream) == cudaSuccess;
+    }
+
+    if (transientRegistration) {
+        const auto unregistrationBegin = std::chrono::steady_clock::now();
+        cudaHostUnregister(hostOutput);
+        const auto unregistrationEnd = std::chrono::steady_clock::now();
+        _outputRegistrationMs +=
+            std::chrono::duration<double, std::milli>(
+                unregistrationEnd - unregistrationBegin).count();
+    }
+
+    return synchronized;
+}
+
+auto InferenceSession::UnregisterOutputBuffers() -> void {
+    for (const HostRegistration &registration : _hostRegistrations) {
+        if (registration.registered) {
+            cudaHostUnregister(registration.address);
+        }
+    }
+
+    _hostRegistrations.clear();
+    _outputTransientTransfers = 0;
+    _outputRegistrationFailures = 0;
+}
+
+auto InferenceSession::GetOutputCacheStatus() const -> OutputCacheStatus {
+    return {
+        .cached = _hostRegistrations.size(),
+        .capacity = kMaxCachedRegistrations,
+        .transientTransfers = _outputTransientTransfers,
+        .registrationFailures = _outputRegistrationFailures,
+    };
 }
 
 auto InferenceSession::LastGpuTimings(GpuStageTimings &timings) const -> bool {
@@ -229,6 +298,7 @@ auto InferenceSession::LastGpuTimings(GpuStageTimings &timings) const -> bool {
     timings.inferenceMs = inference;
     timings.packMs = pack;
     timings.downloadMs = download;
+    timings.outputRegistrationMs = _outputRegistrationMs;
     return true;
 }
 
