@@ -26,6 +26,12 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Windows treats environment variable names case-insensitively, but some process
+# launchers fail if the inherited environment contains both Path and PATH.
+$pathValue = $env:Path
+[Environment]::SetEnvironmentVariable("PATH", $null, [EnvironmentVariableTarget]::Process)
+[Environment]::SetEnvironmentVariable("Path", $pathValue, [EnvironmentVariableTarget]::Process)
+
 # --- Build the benchmark project -----------------------------------------------------
 if (-not $SkipBuild) {
     $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
