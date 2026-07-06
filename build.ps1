@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# Builds MLFilter for development. Locates MSBuild via vswhere and builds the
+# Builds MLFilter. Locates MSBuild via vswhere and builds the
 # solution, so you don't need a Developer prompt.
 #
-# Usage:  .\make_dev.ps1 [-Configuration Release|Debug] [-Rebuild]
+# Usage:  .\build.ps1 [-Configuration Release|Debug] [-Rebuild]
 
 #Requires -Version 5.1
 [CmdletBinding()]

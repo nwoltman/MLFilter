@@ -430,6 +430,7 @@ FodyWeavers.xsd
 
 # Misc
 *.sublime-*
+*.zip
 .agents/
 .DS_store
 

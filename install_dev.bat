@@ -19,7 +19,7 @@ if %errorlevel% neq 0 (
 
 if not exist "%AX%" (
     echo Build not found: %AX%
-    echo Build it first, e.g.:  powershell -ExecutionPolicy Bypass -File "%~dp0make_dev.ps1" -Configuration %CONFIG%
+    echo Build it first, e.g.:  powershell -ExecutionPolicy Bypass -File "%~dp0build.ps1" -Configuration %CONFIG%
     pause
     exit /b 1
 )

@@ -1,6 +1,6 @@
 ## General Instructions
 
-After completing changes to code, use `make_dev.ps1` to ensure everything builds correctly.
+After completing changes to code, use `build.ps1` to ensure everything builds correctly.
 
 ## Quality
 

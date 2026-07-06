@@ -98,9 +98,9 @@ Open `MLFilter.sln` in Visual Studio and build the `Release|x64` configuration, 
 helper script (it locates MSBuild via vswhere, so no Developer prompt is needed):
 
 ```batch
-.\make_dev.ps1                       # builds Release|x64
-.\make_dev.ps1 -Configuration Debug  # Debug build
-.\make_dev.ps1 -Rebuild              # clean rebuild
+.\build.ps1                       # builds Release|x64
+.\build.ps1 -Configuration Debug  # Debug build
+.\build.ps1 -Rebuild              # clean rebuild
 ```
 
 The output is `x64\Release\MLFilter_x64.ax`.
@@ -122,30 +122,31 @@ open its properties to configure the model and file patterns.
 
 ## Creating a redistributable release
 
-`make_release.ps1` packages a self-contained release for machines that do **not** have the
-TensorRT/CUDA SDKs installed:
+`make_release.ps1` packages a release for machines that do **not** have the TensorRT/CUDA SDKs
+installed. With no argument it performs a dry run and only rebuilds the `release\` folder:
 
 ```batch
-.\make_release.ps1     # builds release\
+.\make_release.ps1          # dry run: builds release\
+.\make_release.ps1 1.2.3    # publishes GitHub release v1.2.3
 ```
 
-It takes no parameters — the build is always the same. Build the `Release|x64` configuration
-first (e.g. with `.\make_dev.ps1`). It produces one release that works for most people, in
-`release\`: it copies the built `MLFilter_x64.ax`, generates `install.bat`/`uninstall.bat`, and
-gathers the runtime DLLs the filter needs into a `bin\` subfolder — the TensorRT DLLs (runtime,
-ONNX parser, plugins) plus the CUDA runtime DLLs TensorRT loads dynamically (cudart, nvrtc,
-nvJitLink, …).
+The release script builds `Release|x64` before packaging.
+A real release requires the [GitHub CLI](https://cli.github.com/) to be installed and authenticated.
+It creates the tag and GitHub release, then uploads `MLFilter-vX.Y.Z.zip` and one TensorRT
+builder-resource DLL per supported GPU architecture.
 
-To keep the size reasonable, it bundles TensorRT builder-resource DLLs only for supported consumer
-GPU architectures — `sm75` (Turing, RTX 20xx/GTX 16xx), `sm86` (Ampere, RTX 30xx), `sm89` (Ada,
-RTX 40xx), and `sm120` (Blackwell, RTX 50xx).
+The zip contains the architecture-independent TensorRT DLLs. `install.bat` uses `nvidia-smi` to detect the installed
+GPU architecture and downloads the matching builder-resource DLL from the same GitHub release
+before registering the filter. Supported architectures are `sm75` (Turing, RTX 20xx/GTX 16xx),
+`sm86` (Ampere, RTX 30xx), `sm89` (Ada, RTX 40xx), and `sm120` (Blackwell, RTX 50xx).
 
 ```
 release\
-  MLFilter_x64.ax     the filter
-  install.bat         registers the filter (run as administrator)
-  uninstall.bat       unregisters the filter
-  bin\                bundled TensorRT + CUDA runtime DLLs
+  MLFilter_x64.ax          the filter
+  install.bat              registers the filter (run as administrator)
+  install_dependency.ps1   downloads the correct GPU architecture DLL
+  uninstall.bat            unregisters the filter
+  bin\                     architecture-independent TensorRT DLLs
 ```
 
 The TensorRT DLLs are delay-loaded and `DllMain` prepends this `bin\` folder to the process
