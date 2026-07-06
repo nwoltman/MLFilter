@@ -15,11 +15,11 @@ function Write-Step([string]$Message) { Write-Host "==> $Message" -ForegroundCol
 $Configuration = "Release"
 $OutputDir = Join-Path $PSScriptRoot "release"
 
-# A single release that works for most people: TensorRT builder-resource DLLs for all
-# consumer GPU architectures (plus the PTX JIT fallback), excluding datacenter archs
-# (sm80/sm90/sm100). cuBLAS and the unused lean/dispatch/vc_plugin runtimes are excluded.
-#   sm75 Turing(20xx/16xx)  sm86 Ampere(30xx)  sm89 Ada(40xx)  sm120 Blackwell(50xx)  ptx fallback
-$ConsumerArchitectures = @("sm75", "sm86", "sm89", "sm120", "ptx")
+# A single release that works for most people: TensorRT builder-resource DLLs for
+# consumer GPU architectures, excluding PTX and datacenter archs (sm80/sm90/sm100).
+# cuBLAS and the unused lean/dispatch/vc_plugin runtimes are also excluded.
+#   sm75 Turing(20xx/16xx)  sm86 Ampere(30xx)  sm89 Ada(40xx)  sm120 Blackwell(50xx)
+$ConsumerArchitectures = @("sm75", "sm86", "sm89", "sm120")
 
 # --- Validate prerequisites ----------------------------------------------------------
 if (-not $env:TENSORRT_ROOT) { throw "TENSORRT_ROOT is not set. See README 'Development setup'." }

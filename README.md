@@ -136,10 +136,9 @@ gathers the runtime DLLs the filter needs into a `bin\` subfolder — the Tensor
 ONNX parser, plugins) plus the CUDA runtime DLLs TensorRT loads dynamically (cudart, nvrtc,
 nvJitLink, …).
 
-To keep the size reasonable, it bundles TensorRT builder-resource DLLs only for consumer GPU
-architectures — `sm75` (Turing, RTX 20xx/GTX 16xx), `sm86` (Ampere, RTX 30xx), `sm89` (Ada, RTX
-40xx), `sm120` (Blackwell, RTX 50xx), plus `ptx` (a JIT fallback that lets other architectures
-still build).
+To keep the size reasonable, it bundles TensorRT builder-resource DLLs only for supported consumer
+GPU architectures — `sm75` (Turing, RTX 20xx/GTX 16xx), `sm86` (Ampere, RTX 30xx), `sm89` (Ada,
+RTX 40xx), and `sm120` (Blackwell, RTX 50xx).
 
 ```
 release\
