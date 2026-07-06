@@ -9,6 +9,7 @@
 #include <windows.h>
 
 #include "color/yuv420_format.h"
+#include "debug_overlay.h"
 
 struct IMediaSample;
 
@@ -39,12 +40,13 @@ public:
 
     // Converts + infers + packs one frame's pixels into out (RGB48, top-down). Does not touch
     // timestamps/flags — the caller copies those. Returns an HRESULT.
-    auto Process(IMediaSample *in, IMediaSample *out) -> HRESULT;
+    auto Process(IMediaSample *in, IMediaSample *out, bool showDebugOverlay) -> HRESULT;
 
 private:
     FrameProcessor() = default;
 
     std::unique_ptr<InferenceSession> _session;
+    DebugOverlay _debugOverlay;
     Yuv420Conversion _conversion {};
 
     int _outW = 0;

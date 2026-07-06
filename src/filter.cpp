@@ -170,6 +170,10 @@ auto ResolveColorInfo(const CMediaType &mt, int height, bool &bt709, bool &fullR
 CMLFilter::CMLFilter(LPUNKNOWN pUnk, HRESULT * /*phr*/)
     : CTransformFilter(FILTER_NAME_WIDE, pUnk, CLSID_MLFilter) {}
 
+CMLFilter::~CMLFilter() {
+    _hotkeyListener.Stop();
+}
+
 auto CALLBACK CMLFilter::CreateInstance(LPUNKNOWN pUnk, HRESULT *phr) -> CUnknown * {
     auto *instance = new CMLFilter(pUnk, phr);
     if (instance == nullptr && phr != nullptr) {
@@ -425,7 +429,8 @@ auto CMLFilter::Transform(IMediaSample *pIn, IMediaSample *pOut) -> HRESULT {
         return VFW_E_TYPE_NOT_ACCEPTED;
     }
 
-    return _processor->Process(pIn, pOut);
+    return _processor->Process(
+        pIn, pOut, _debugOverlayEnabled.load(std::memory_order_relaxed));
 }
 
 auto CMLFilter::CompleteConnect(PIN_DIRECTION direction, IPin *pReceivePin) -> HRESULT {
@@ -450,12 +455,21 @@ auto CMLFilter::CompleteConnect(PIN_DIRECTION direction, IPin *pReceivePin) -> H
         if (_processor == nullptr) {
             ScheduleSelfRemoval();
         }
+    } else if (direction == PINDIR_OUTPUT) {
+        // Register only after this instance is part of a complete playback graph. MPC-BE may
+        // instantiate probe copies while enumerating filters; registering in the constructor
+        // lets a probe copy claim the process-wide hotkey instead of the streaming instance.
+        _hotkeyListener.Start(_debugOverlayEnabled);
     }
 
     return hr;
 }
 
 auto CMLFilter::BreakConnect(PIN_DIRECTION direction) -> HRESULT {
+    if (direction == PINDIR_OUTPUT) {
+        _hotkeyListener.Stop();
+        _debugOverlayEnabled.store(false, std::memory_order_relaxed);
+    }
     if (direction == PINDIR_INPUT) {
         _processor.reset();
         _inputFormatSupported = true;

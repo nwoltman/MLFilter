@@ -19,6 +19,7 @@ The filter is mainly intended to be used to upscale video with models like the
 - Double-click the filter to open the filter configuration. Select HD and/or SD ONNX models.
   The SD model is used when either source dimension is below 720p (1280x720); otherwise
   the HD model is used. With neither model configured, the filter removes itself from the graph.
+- Press `Ctrl+Alt+J` to show the MLFilter Debug overlay when playing a video
 
 ## System requirements
 

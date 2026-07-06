@@ -1,5 +1,7 @@
 ## General Instructions
 
+When writing code, use blank lines to separate logical sections of functions.
+
 After completing changes to code, use `build.ps1` to ensure everything builds correctly.
 
 ## Quality

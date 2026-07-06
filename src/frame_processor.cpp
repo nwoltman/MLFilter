@@ -8,6 +8,23 @@
 #include "engine/inference_session.h"
 
 namespace MLFilter {
+namespace {
+
+auto OverlayFileName(const std::filesystem::path &path) -> std::string {
+    const std::wstring fileName = path.filename().native();
+    std::string result;
+    result.reserve(fileName.size());
+
+    for (const wchar_t character : fileName) {
+        result.push_back(character >= L' ' && character <= L'~'
+                             ? static_cast<char>(character)
+                             : '?');
+    }
+
+    return result;
+}
+
+}
 
 auto FrameProcessor::Create(const std::filesystem::path &enginePath,
                             Yuv420Format format,
@@ -29,13 +46,18 @@ auto FrameProcessor::Create(const std::filesystem::path &enginePath,
 
     processor->_outW = processor->_session->OutputWidth();
     processor->_outH = processor->_session->OutputHeight();
+    processor->_debugOverlay.SetStreamInfo(
+        OverlayFileName(enginePath),
+        processor->_session->InputWidth(), processor->_session->InputHeight(),
+        format == Yuv420Format::NV12 ? "NV12" : "P010",
+        bt709, fullRange, processor->_outW, processor->_outH);
 
     return processor;
 }
 
 FrameProcessor::~FrameProcessor() = default;
 
-auto FrameProcessor::Process(IMediaSample *in, IMediaSample *out) -> HRESULT {
+auto FrameProcessor::Process(IMediaSample *in, IMediaSample *out, bool showDebugOverlay) -> HRESULT {
     BYTE *srcBuffer = nullptr;
     if (FAILED(in->GetPointer(&srcBuffer)) || srcBuffer == nullptr) {
         return E_FAIL;
@@ -65,6 +87,15 @@ auto FrameProcessor::Process(IMediaSample *in, IMediaSample *out) -> HRESULT {
     // output sample, expanding each row to the allocator's row pitch.
     if (!_session->Download(dstBuffer, static_cast<size_t>(stride))) {
         return E_FAIL;
+    }
+
+    if (showDebugOverlay) {
+        InferenceSession::GpuStageTimings gpu {};
+        if (_session->LastGpuTimings(gpu)) {
+            _debugOverlay.Draw(dstBuffer, static_cast<size_t>(stride), _outW, _outH,
+                               {gpu.uploadMs, gpu.preprocessMs, gpu.inferenceMs,
+                                gpu.packMs, gpu.downloadMs});
+        }
     }
 
     out->SetActualDataLength(stride * _outH);

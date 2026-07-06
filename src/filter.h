@@ -9,6 +9,7 @@
 #include <streams.h>
 
 #include "frame_processor.h"
+#include "hotkey_listener.h"
 
 namespace MLFilter {
 
@@ -20,6 +21,7 @@ class CMLFilter
     , public ISpecifyPropertyPages {
 public:
     CMLFilter(LPUNKNOWN pUnk, HRESULT *phr);
+    ~CMLFilter() override;
 
     static auto CALLBACK CreateInstance(LPUNKNOWN pUnk, HRESULT *phr) -> CUnknown *;
 
@@ -58,6 +60,8 @@ private:
     auto ScheduleSelfRemoval() -> void;
 
     std::unique_ptr<FrameProcessor> _processor;
+    std::atomic<bool> _debugOverlayEnabled = false;
+    HotkeyListener _hotkeyListener;
     std::atomic<bool> _removalScheduled = false;
     bool _inputFormatSupported = true;
     bool _inputFormatErrorReported = false;
