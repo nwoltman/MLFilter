@@ -126,6 +126,35 @@ auto SelectModel(const Settings &settings, int width, int height) -> const std::
     return settings.hdModelPath;
 }
 
+struct InputConfig {
+    Settings settings;
+    int width = 0;
+    int height = 0;
+    std::filesystem::path modelPath;
+};
+
+auto ResolveInputConfig(const CMediaType &inputType, InputConfig &config) -> bool {
+    Settings settings;
+    settings.Load();
+
+    int width = 0;
+    int height = 0;
+    if (!GetVideoResolution(inputType, width, height)) {
+        return false;
+    }
+
+    const std::wstring &modelPath = SelectModel(settings, width, height);
+    if (modelPath.empty() || !std::filesystem::exists(modelPath)) {
+        return false;
+    }
+
+    config.settings = settings;
+    config.width = width;
+    config.height = height;
+    config.modelPath = modelPath;
+    return true;
+}
+
 // Maps an internally supported input subtype to the converter's format kind.
 auto KindForSubtype(const GUID &s, Yuv420Format &kind) -> bool {
     if (s == FOURCCMap(Fourcc('N', 'V', '1', '2'))) { kind = Yuv420Format::NV12; }
@@ -482,8 +511,7 @@ auto CMLFilter::CompleteConnect(PIN_DIRECTION direction, IPin *pReceivePin) -> H
             _processor.reset();
             return S_OK;
         }
-        EnsureEngineForInput();
-        SetupProcessor();
+        SetupProcessorForInput();
         if (_processor == nullptr) {
             ScheduleSelfRemoval();
         }
@@ -517,68 +545,44 @@ auto CMLFilter::ReleaseOutputRegistrations() -> void {
     }
 }
 
-auto CMLFilter::EnsureEngineForInput() -> void {
-    Settings settings;
-    settings.Load();
-
-    int width = 0;
-    int height = 0;
-    if (m_pInput == nullptr || !GetVideoResolution(m_pInput->CurrentMediaType(), width, height)) {
-        return;
-    }
-
-    const std::wstring &modelPath = SelectModel(settings, width, height);
-    if (modelPath.empty() || !std::filesystem::exists(modelPath)) {
-        return;
-    }
-
-    TensorRTEngineBuilder builder;
-    const EngineBuildRequest request { .onnxPath = modelPath, .width = width, .height = height };
-    if (builder.Exists(request)) {
-        return;  // already built for this resolution/GPU/driver
-    }
-
-    // Build synchronously (blocks graph completion until ready) with a responsive progress
-    // window on its own thread.
-    ProgressWindow window;
-    window.Open(FILTER_NAME_WIDE);
-
-    const EngineBuildResult result = builder.Build(request, [&window](const std::wstring &message) {
-        window.Log(message);
-    });
-
-    if (result.success) {
-        window.Log(L"Engine ready. Starting playback...");
-    } else {
-        window.Log(L"Engine build failed; the video will play without processing.");
-        window.Log(result.message);
-    }
-
-    Sleep(result.success ? 600 : 2500);
-    window.Close();
-}
-
-auto CMLFilter::SetupProcessor() -> void {
+auto CMLFilter::SetupProcessorForInput() -> void {
     _processor.reset();
 
-    Settings settings;
-    settings.Load();
-
-    int width = 0;
-    int height = 0;
-    if (m_pInput == nullptr || !GetVideoResolution(m_pInput->CurrentMediaType(), width, height)) {
+    if (m_pInput == nullptr) {
         return;
     }
 
-    const std::wstring &modelPath = SelectModel(settings, width, height);
-    if (modelPath.empty() || !std::filesystem::exists(modelPath)) {
+    InputConfig config;
+    if (!ResolveInputConfig(m_pInput->CurrentMediaType(), config)) {
         return;
     }
 
     TensorRTEngineBuilder builder;
-    const EngineBuildRequest request { .onnxPath = modelPath, .width = width, .height = height };
+    const EngineBuildRequest request { .onnxPath = config.modelPath, .width = config.width, .height = config.height };
+
     if (!builder.Exists(request)) {
-        return;  // the engine build failed earlier
+        // Build synchronously (blocks graph completion until ready) with a responsive progress
+        // window on its own thread.
+        ProgressWindow window;
+        window.Open(FILTER_NAME_WIDE);
+
+        const EngineBuildResult result = builder.Build(request, [&window](const std::wstring &message) {
+            window.Log(message);
+        });
+
+        if (result.success) {
+            window.Log(L"Engine ready. Starting playback...");
+        } else {
+            window.Log(L"Engine build failed; the video will play without processing.");
+            window.Log(result.message);
+        }
+
+        Sleep(result.success ? 600 : 2500);
+        window.Close();
+
+        if (!result.success) {
+            return;
+        }
     }
 
     const CMediaType &mt = m_pInput->CurrentMediaType();
@@ -588,7 +592,7 @@ auto CMLFilter::SetupProcessor() -> void {
     }
     bool bt709 = false;
     bool fullRange = false;
-    ResolveColorInfo(mt, height, bt709, fullRange);
+    ResolveColorInfo(mt, config.height, bt709, fullRange);
 
     std::wstring error;
     _processor = FrameProcessor::Create(builder.EnginePath(request), kind, bt709, fullRange, error);
@@ -597,29 +601,20 @@ auto CMLFilter::SetupProcessor() -> void {
 // Remove the filter when the selected model is unavailable, the resolution is above
 // the configured limit, or the file path doesn't match the configured globs.
 auto CMLFilter::ShouldProcessCurrentFile(const CMediaType &inputType) -> bool {
-    Settings settings;
-    settings.Load();
-
-    int width = 0;
-    int height = 0;
-    if (!GetVideoResolution(inputType, width, height)) {
+    InputConfig config;
+    if (!ResolveInputConfig(inputType, config)) {
         return false;
     }
 
-    const std::wstring &modelPath = SelectModel(settings, width, height);
-    if (modelPath.empty() || !std::filesystem::exists(modelPath)) {
+    if (config.settings.onlyRun1080pOrLower &&
+        (config.width > MAX_INPUT_WIDTH || config.height > MAX_INPUT_HEIGHT)) {
         return false;
     }
 
-    if (settings.onlyRun1080pOrLower &&
-        (width > MAX_INPUT_WIDTH || height > MAX_INPUT_HEIGHT)) {
-        return false;
-    }
-
-    if (Trim(settings.fileGlobs).empty()) {
+    if (Trim(config.settings.fileGlobs).empty()) {
         return true;  // no glob filter configured
     }
-    return FileMatchesGlobs(GetSourceFilePath(), settings.fileGlobs);
+    return FileMatchesGlobs(GetSourceFilePath(), config.settings.fileGlobs);
 }
 
 auto CMLFilter::GetSourceFilePath() const -> std::wstring {
