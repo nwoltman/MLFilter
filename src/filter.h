@@ -14,6 +14,7 @@
 namespace MLFilter {
 
 class MLFilterOutputPin;
+class MLFilterInputPin;
 
 // Copy transform: converts a supported 4:2:0 YUV input frame to RGB, runs the TensorRT engine, and
 // emits RGB48 downstream (a different pixel format and possibly a larger resolution than the
@@ -44,6 +45,8 @@ public:
     auto STDMETHODCALLTYPE GetPages(CAUUID *pPages) -> HRESULT override;
 
 private:
+    auto InputPin() const -> MLFilterInputPin *;
+
     friend class MLFilterOutputPin;
 
     auto ReleaseOutputRegistrations() -> void;

@@ -19,6 +19,7 @@ public:
     auto SetStreamInfo(std::string engineFileName, int inputWidth, int inputHeight,
                        const char *inputFormat, bool bt709, bool fullRange,
                        int outputWidth, int outputHeight) -> void;
+    auto SetTransportInfo(std::string transportLine) -> void;
     auto Draw(uint8_t *frame, size_t strideBytes, int width, int height,
               const DebugOverlayTimings &timings) -> void;
 
@@ -32,6 +33,7 @@ private:
     std::string _engineLine;
     std::string _inputLine;
     std::string _outputLine;
+    std::string _transportLine;
 };
 
 }

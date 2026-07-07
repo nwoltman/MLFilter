@@ -9,6 +9,7 @@
 #include <windows.h>
 
 #include "color/yuv420_format.h"
+#include "d3d11_native_interfaces.h"
 #include "debug_overlay.h"
 
 struct IMediaSample;
@@ -41,7 +42,8 @@ public:
     // Converts + infers + packs one frame's pixels into out (RGB48, top-down). Does not touch
     // timestamps/flags — the caller copies those. Returns an HRESULT.
     auto Process(IMediaSample *in, IMediaSample *out, bool showDebugOverlay,
-                 double previousFrameMs, double &overlayOverheadMs) -> HRESULT;
+                 double previousFrameMs, double &overlayOverheadMs,
+                 const D3D11DecoderState *d3d11State = nullptr) -> HRESULT;
 
     auto UnregisterOutputBuffers() -> void;
 

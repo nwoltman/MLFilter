@@ -9,6 +9,10 @@
 #include <string>
 #include <vector>
 
+#include <cuda_d3d11_interop.h>
+#include <d3d11.h>
+#include <dxgi.h>
+
 #include "color/yuv420_format.h"
 #include "engine/inference_session.h"
 #include "engine/tensorrt_engine_builder.h"
@@ -16,6 +20,42 @@
 
 namespace {
 using Clock = std::chrono::steady_clock;
+
+template <typename T>
+class ComRef {
+public:
+    ~ComRef() {
+        Reset();
+    }
+
+    ComRef() = default;
+    ComRef(const ComRef &) = delete;
+    auto operator=(const ComRef &) -> ComRef & = delete;
+
+    auto Address() -> T ** {
+        Reset();
+        return &_value;
+    }
+
+    auto Get() const -> T * {
+        return _value;
+    }
+
+    auto Reset() -> void {
+        if (_value != nullptr) {
+            _value->Release();
+            _value = nullptr;
+        }
+    }
+
+private:
+    T *_value = nullptr;
+};
+
+enum class UploadMode {
+    Software,
+    D3D11,
+};
 
 auto ScaleCoordinate(size_t coordinate, size_t extent, int minimum, int maximum) -> uint16_t {
     if (extent <= 1) return static_cast<uint16_t>((minimum + maximum) / 2);
@@ -56,6 +96,7 @@ struct Args {
     MLFilter::Yuv420Format format = MLFilter::Yuv420Format::NV12;
     int frames = 300;
     int warmup = 10;
+    UploadMode uploadMode = UploadMode::Software;
 };
 
 auto ParseArgs(int argc, wchar_t **argv, Args &args) -> bool {
@@ -72,10 +113,111 @@ auto ParseArgs(int argc, wchar_t **argv, Args &args) -> bool {
             if (_wcsicmp(value.c_str(), L"nv12") == 0) args.format = MLFilter::Yuv420Format::NV12;
             else if (_wcsicmp(value.c_str(), L"p010") == 0) args.format = MLFilter::Yuv420Format::P010;
             else return false;
+        } else if (a == L"--upload") {
+            const auto value = next();
+            if (_wcsicmp(value.c_str(), L"software") == 0) args.uploadMode = UploadMode::Software;
+            else if (_wcsicmp(value.c_str(), L"d3d11") == 0) args.uploadMode = UploadMode::D3D11;
+            else return false;
         } else return false;
     }
     return args.width > 0 && args.height > 0 && !(args.width & 1) && !(args.height & 1) &&
            args.frames > 0 && args.warmup >= 0;
+}
+
+auto FindCudaDxgiAdapter(IDXGIAdapter **adapter) -> bool {
+    *adapter = nullptr;
+
+    int currentCudaDevice = 0;
+    if (cudaGetDevice(&currentCudaDevice) != cudaSuccess) {
+        cudaGetLastError();
+        return false;
+    }
+
+    ComRef<IDXGIFactory> factory;
+    if (FAILED(CreateDXGIFactory(__uuidof(IDXGIFactory), reinterpret_cast<void **>(factory.Address())))) {
+        return false;
+    }
+
+    for (UINT index = 0;; ++index) {
+        IDXGIAdapter *candidate = nullptr;
+        if (factory.Get()->EnumAdapters(index, &candidate) == DXGI_ERROR_NOT_FOUND) {
+            break;
+        }
+
+        int adapterCudaDevice = -1;
+        const cudaError_t cudaResult = cudaD3D11GetDevice(&adapterCudaDevice, candidate);
+        if (cudaResult == cudaSuccess && adapterCudaDevice == currentCudaDevice) {
+            *adapter = candidate;
+            return true;
+        }
+
+        if (cudaResult != cudaSuccess) {
+            cudaGetLastError();
+        }
+        candidate->Release();
+    }
+
+    return false;
+}
+
+auto CreateD3D11BenchmarkDevice(ComRef<ID3D11Device> &device,
+                                ComRef<ID3D11DeviceContext> &context,
+                                std::wstring &error) -> bool {
+    ComRef<IDXGIAdapter> adapter;
+    if (!FindCudaDxgiAdapter(adapter.Address())) {
+        error = L"Could not find a DXGI adapter for the current CUDA device.";
+        return false;
+    }
+
+    const D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_0};
+    D3D_FEATURE_LEVEL createdLevel = D3D_FEATURE_LEVEL_11_0;
+    const HRESULT hr = D3D11CreateDevice(adapter.Get(),
+                                         D3D_DRIVER_TYPE_UNKNOWN,
+                                         nullptr,
+                                         D3D11_CREATE_DEVICE_SINGLETHREADED,
+                                         levels,
+                                         ARRAYSIZE(levels),
+                                         D3D11_SDK_VERSION,
+                                         device.Address(),
+                                         &createdLevel,
+                                         context.Address());
+    if (FAILED(hr)) {
+        error = L"Could not create a D3D11 device on the CUDA adapter.";
+        return false;
+    }
+
+    return true;
+}
+
+auto CreateD3D11InputTexture(ID3D11Device *device,
+                             const std::vector<unsigned char> &frame,
+                             const Args &args,
+                             ComRef<ID3D11Texture2D> &texture,
+                             std::wstring &error) -> bool {
+    const size_t sampleBytes = args.format == MLFilter::Yuv420Format::P010 ? 2 : 1;
+
+    D3D11_TEXTURE2D_DESC desc {};
+    desc.Width = static_cast<UINT>(args.width);
+    desc.Height = static_cast<UINT>(args.height);
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = args.format == MLFilter::Yuv420Format::P010 ? DXGI_FORMAT_P010 : DXGI_FORMAT_NV12;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+    D3D11_SUBRESOURCE_DATA initial {};
+    initial.pSysMem = frame.data();
+    initial.SysMemPitch = static_cast<UINT>(static_cast<size_t>(args.width) * sampleBytes);
+    initial.SysMemSlicePitch = static_cast<UINT>(frame.size());
+
+    const HRESULT hr = device->CreateTexture2D(&desc, &initial, texture.Address());
+    if (FAILED(hr)) {
+        error = L"Could not create the synthetic D3D11 NV12/P010 input texture.";
+        return false;
+    }
+
+    return true;
 }
 }
 
@@ -83,7 +225,7 @@ auto wmain(int argc, wchar_t **argv) -> int {
     Args args;
     if (!ParseArgs(argc, argv, args)) {
         wprintf(L"Usage: benchmark_x64.exe [--width N] [--height N] [--format nv12|p010] "
-                L"[--model file.onnx] [--frames N] [--warmup N]\n");
+                L"[--upload software|d3d11] [--model file.onnx] [--frames N] [--warmup N]\n");
         return 1;
     }
     std::wstring modelPath = args.modelPath;
@@ -124,6 +266,18 @@ auto wmain(int argc, wchar_t **argv) -> int {
     if (depth == 10) GenerateGradient<uint16_t>(frame, args.width, args.height, depth);
     else GenerateGradient<uint8_t>(frame, args.width, args.height, depth);
 
+    ComRef<ID3D11Device> d3d11Device;
+    ComRef<ID3D11DeviceContext> d3d11Context;
+    ComRef<ID3D11Texture2D> d3d11Texture;
+    if (args.uploadMode == UploadMode::D3D11) {
+        std::wstring d3d11Error;
+        if (!CreateD3D11BenchmarkDevice(d3d11Device, d3d11Context, d3d11Error) ||
+            !CreateD3D11InputTexture(d3d11Device.Get(), frame, args, d3d11Texture, d3d11Error)) {
+            wprintf(L"D3D11 benchmark setup failed: %ls\n", d3d11Error.c_str());
+            return 1;
+        }
+    }
+
     const int outW = session->OutputWidth();
     const int outH = session->OutputHeight();
     std::vector<uint16_t> output(static_cast<size_t>(3) * outW * outH);
@@ -138,7 +292,12 @@ auto wmain(int argc, wchar_t **argv) -> int {
     while (warmed + timed < args.warmup + args.frames) {
         const bool timing = warmed >= args.warmup;
         const auto begin = Clock::now();
-        if (!session->UploadYuv420(frame.data(), conversion) || !session->Infer() ||
+        const bool uploaded = args.uploadMode == UploadMode::D3D11
+            ? session->UploadD3D11Yuv420(d3d11Texture.Get(), 0, d3d11Device.Get(),
+                                         d3d11Context.Get(), nullptr, conversion)
+            : session->UploadYuv420(frame.data(), conversion);
+
+        if (!uploaded || !session->Infer() ||
             !session->Download(output.data(), static_cast<size_t>(outW) * 6,
                                output.size() * sizeof(uint16_t))) {
             wprintf(L"Inference failed.\n");
@@ -167,11 +326,14 @@ auto wmain(int argc, wchar_t **argv) -> int {
     wprintf(L"ONNX model: %ls\n", modelPath.c_str());
     wprintf(L"Input: %dx%d %ls, %ls limited\n", args.width, args.height,
             depth == 10 ? L"P010" : L"NV12", conversion.bt709 ? L"BT.709" : L"BT.601");
+    wprintf(L"Upload input: %ls\n",
+            args.uploadMode == UploadMode::D3D11 ? L"D3D11 texture -> CUDA buffer" : L"software frame -> CUDA buffer");
     wprintf(L"Output: %dx%d\n\n", outW, outH);
     wprintf(L"======================== Results (%d frames) ========================\n", timed);
     wprintf(L"  Stage           avg/frame     share    work\n");
-    wprintf(L"  Upload         %8.3f ms    %5.1f%%    H2D (move frame to GPU)\n",
-            ms(uploadSec), pct(uploadSec));
+    wprintf(L"  Upload         %8.3f ms    %5.1f%%    %ls\n",
+            ms(uploadSec), pct(uploadSec),
+            args.uploadMode == UploadMode::D3D11 ? L"D3D11 texture interop/pack to CUDA buffer" : L"H2D (move frame to GPU)");
     wprintf(L"  Pre-process    %8.3f ms    %5.1f%%    Unpack/normalize/chroma/YUV-to-RGB/FP16/clamp\n",
             ms(preprocessSec), pct(preprocessSec));
     wprintf(L"  Inference      %8.3f ms    %5.1f%%    TensorRT engine inference\n",

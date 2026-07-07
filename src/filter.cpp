@@ -16,6 +16,7 @@
 #include "constants.h"
 #include "formats.h"
 #include "guids.h"
+#include "input_pin.h"
 #include "output_pin.h"
 #include "progress_window.h"
 #include "settings.h"
@@ -203,6 +204,10 @@ CMLFilter::CMLFilter(LPUNKNOWN pUnk, HRESULT * /*phr*/)
 
 CMLFilter::~CMLFilter() {
     _hotkeyListener.Stop();
+}
+
+auto CMLFilter::InputPin() const -> MLFilterInputPin * {
+    return static_cast<MLFilterInputPin *>(m_pInput);
 }
 
 auto CALLBACK CMLFilter::CreateInstance(LPUNKNOWN pUnk, HRESULT *phr) -> CUnknown * {
@@ -424,8 +429,7 @@ auto CMLFilter::GetPin(int n) -> CBasePin * {
     HRESULT hr = S_OK;
 
     if (m_pInput == nullptr) {
-        m_pInput = new CTransformInputPin(
-            NAME("Transform input pin"), this, &hr, L"XForm In");
+        m_pInput = new MLFilterInputPin(this, &hr);
         if (m_pInput == nullptr || FAILED(hr)) {
             delete m_pInput;
             m_pInput = nullptr;
@@ -493,14 +497,27 @@ auto CMLFilter::Transform(IMediaSample *pIn, IMediaSample *pOut) -> HRESULT {
         return VFW_E_TYPE_NOT_ACCEPTED;
     }
 
+    D3D11DecoderState d3d11State;
+    if (InputPin() != nullptr) {
+        d3d11State = InputPin()->D3D11State();
+    }
+
     double overlayOverheadMs = 0;
     const HRESULT result = _processor->Process(
         pIn, pOut, _debugOverlayEnabled.load(std::memory_order_relaxed), _previousFrameMs,
-        overlayOverheadMs);
+        overlayOverheadMs, &d3d11State);
+
+    if (d3d11State.context != nullptr) {
+        d3d11State.context->Release();
+    }
+    if (d3d11State.device != nullptr) {
+        d3d11State.device->Release();
+    }
 
     const auto frameEnd = std::chrono::steady_clock::now();
     const double totalFrameMs =
         std::chrono::duration<double, std::milli>(frameEnd - frameBegin).count();
+
     _previousFrameMs = totalFrameMs > overlayOverheadMs
         ? totalFrameMs - overlayOverheadMs
         : 0;

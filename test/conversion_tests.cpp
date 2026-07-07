@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <string>
 #include <vector>
 
+#include <cuda_d3d11_interop.h>
 #include <cuda_runtime.h>
+#include <d3d11.h>
+#include <dxgi.h>
 
 #include "color/yuv420_format.h"
+#include "engine/d3d11_cuda_input.h"
 #include "engine/fp16_kernels.h"
 #include "helpers/zimg_reference.h"
 
@@ -16,6 +19,38 @@ namespace {
 
 constexpr int kWidth = 1920;
 constexpr int kHeight = 1080;
+
+template <typename T>
+class ComRef {
+public:
+    ComRef() = default;
+
+    ~ComRef() {
+        Reset();
+    }
+
+    ComRef(const ComRef &) = delete;
+    auto operator=(const ComRef &) -> ComRef & = delete;
+
+    auto Address() -> T ** {
+        Reset();
+        return &_value;
+    }
+
+    auto Get() const -> T * {
+        return _value;
+    }
+
+    auto Reset() -> void {
+        if (_value != nullptr) {
+            _value->Release();
+            _value = nullptr;
+        }
+    }
+
+private:
+    T *_value = nullptr;
+};
 
 enum class Pattern {
     Gradient,
@@ -36,6 +71,92 @@ struct DeviceBuffer {
     void *data = nullptr;
     ~DeviceBuffer() { cudaFree(data); }
 };
+
+struct CudaEvent {
+    cudaEvent_t value = nullptr;
+    ~CudaEvent() {
+        if (value != nullptr) {
+            cudaEventDestroy(value);
+        }
+    }
+};
+
+auto FindCudaDxgiAdapter(IDXGIAdapter **adapter) -> bool {
+    *adapter = nullptr;
+
+    int currentCudaDevice = 0;
+    if (cudaGetDevice(&currentCudaDevice) != cudaSuccess) {
+        cudaGetLastError();
+        return false;
+    }
+
+    ComRef<IDXGIFactory> factory;
+    if (FAILED(CreateDXGIFactory(__uuidof(IDXGIFactory),
+                                 reinterpret_cast<void **>(factory.Address())))) {
+        return false;
+    }
+
+    for (UINT index = 0;; ++index) {
+        IDXGIAdapter *candidate = nullptr;
+        if (factory.Get()->EnumAdapters(index, &candidate) == DXGI_ERROR_NOT_FOUND) {
+            break;
+        }
+
+        int adapterCudaDevice = -1;
+        const cudaError_t result = cudaD3D11GetDevice(&adapterCudaDevice, candidate);
+        if (result == cudaSuccess && adapterCudaDevice == currentCudaDevice) {
+            *adapter = candidate;
+            return true;
+        }
+
+        if (result != cudaSuccess) {
+            cudaGetLastError();
+        }
+        candidate->Release();
+    }
+
+    return false;
+}
+
+auto CreateD3D11TestDevice(ComRef<ID3D11Device> &device,
+                           ComRef<ID3D11DeviceContext> &context) -> bool {
+    ComRef<IDXGIAdapter> adapter;
+    if (!FindCudaDxgiAdapter(adapter.Address())) {
+        return false;
+    }
+
+    const D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_0};
+    D3D_FEATURE_LEVEL createdLevel = D3D_FEATURE_LEVEL_11_0;
+    return SUCCEEDED(D3D11CreateDevice(adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr,
+                                       D3D11_CREATE_DEVICE_SINGLETHREADED,
+                                       levels, ARRAYSIZE(levels), D3D11_SDK_VERSION,
+                                       device.Address(), &createdLevel, context.Address()));
+}
+
+auto CreateD3D11InputTexture(ID3D11Device *device,
+                             const std::vector<unsigned char> &frame,
+                             MLFilter::Yuv420Format format,
+                             ComRef<ID3D11Texture2D> &texture) -> bool {
+    const size_t sampleBytes = format == MLFilter::Yuv420Format::P010 ? 2 : 1;
+
+    D3D11_TEXTURE2D_DESC desc {};
+    desc.Width = kWidth;
+    desc.Height = kHeight;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = format == MLFilter::Yuv420Format::P010
+        ? DXGI_FORMAT_P010
+        : DXGI_FORMAT_NV12;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+    D3D11_SUBRESOURCE_DATA initial {};
+    initial.pSysMem = frame.data();
+    initial.SysMemPitch = static_cast<UINT>(static_cast<size_t>(kWidth) * sampleBytes);
+    initial.SysMemSlicePitch = static_cast<UINT>(frame.size());
+    return SUCCEEDED(device->CreateTexture2D(&desc, &initial, texture.Address()));
+}
 
 auto Hash(uint32_t value) -> uint32_t {
     value ^= value >> 16;
@@ -124,7 +245,53 @@ auto ClampHalf(uint16_t value) -> uint16_t {
     return value;
 }
 
-auto RunConversionTest(MLFilter::Yuv420Format format, bool bt709, Pattern pattern) -> bool {
+struct ConversionComparison {
+    size_t exact = 0;
+    unsigned maximumDelta = 0;
+    int maximumPlane = 0;
+    int maximumX = 0;
+    int maximumY = 0;
+};
+
+auto CompareWithReference(const std::vector<uint16_t> &actual,
+                          const uint16_t *const planes[3],
+                          ptrdiff_t strideBytes) -> ConversionComparison {
+    ConversionComparison comparison;
+
+    for (int plane = 0; plane < 3; ++plane) {
+        for (int y = 0; y < kHeight; ++y) {
+            const auto *row = reinterpret_cast<const uint16_t *>(
+                reinterpret_cast<const unsigned char *>(planes[plane]) +
+                static_cast<ptrdiff_t>(y) * strideBytes);
+            for (int x = 0; x < kWidth; ++x) {
+                const uint16_t expected = ClampHalf(row[x]);
+                const uint16_t value =
+                    actual[(static_cast<size_t>(plane) * kHeight + y) * kWidth + x];
+                if (expected == value) {
+                    ++comparison.exact;
+                }
+                const unsigned delta = expected > value ? expected - value : value - expected;
+                if (delta > comparison.maximumDelta) {
+                    comparison.maximumDelta = delta;
+                    comparison.maximumPlane = plane;
+                    comparison.maximumX = x;
+                    comparison.maximumY = y;
+                }
+            }
+        }
+    }
+
+    return comparison;
+}
+
+auto RunConversionTest(MLFilter::Yuv420Format format,
+                       bool bt709,
+                       Pattern pattern,
+                       ID3D11Device *d3dDevice,
+                       ID3D11DeviceContext *d3dContext,
+                       MLFilter::D3D11CudaInput &d3dInput,
+                       cudaEvent_t uploadedEvent,
+                       cudaEvent_t preprocessedEvent) -> bool {
     const bool p010 = format == MLFilter::Yuv420Format::P010;
     std::vector<unsigned char> frame =
         p010 ? MakeLimitedFrame<uint16_t>(10, pattern)
@@ -150,13 +317,22 @@ auto RunConversionTest(MLFilter::Yuv420Format format, bool bt709, Pattern patter
         return false;
     }
 
-    DeviceBuffer deviceInput;
+    DeviceBuffer deviceTightInput;
     DeviceBuffer deviceOutput;
     const size_t outputBytes = static_cast<size_t>(3) * kWidth * kHeight * sizeof(uint16_t);
-    if (cudaMalloc(&deviceInput.data, frame.size()) != cudaSuccess ||
-        cudaMalloc(&deviceOutput.data, outputBytes) != cudaSuccess ||
-        cudaMemcpy(deviceInput.data, frame.data(), frame.size(), cudaMemcpyHostToDevice) != cudaSuccess) {
+    const size_t sampleBytes = p010 ? 2 : 1;
+    const size_t yBytes = static_cast<size_t>(kWidth) * kHeight * sampleBytes;
+    const size_t rowBytes = static_cast<size_t>(kWidth) * sampleBytes;
+
+    if (cudaMalloc(&deviceTightInput.data, frame.size()) != cudaSuccess ||
+        cudaMalloc(&deviceOutput.data, outputBytes) != cudaSuccess) {
         printf("CUDA allocation/upload failed: %s\n", cudaGetErrorString(cudaGetLastError()));
+        return false;
+    }
+
+    if (cudaMemcpy(deviceTightInput.data, frame.data(), frame.size(),
+                   cudaMemcpyHostToDevice) != cudaSuccess) {
+        printf("CUDA upload failed: %s\n", cudaGetErrorString(cudaGetLastError()));
         return false;
     }
 
@@ -167,7 +343,8 @@ auto RunConversionTest(MLFilter::Yuv420Format format, bool bt709, Pattern patter
     };
     const size_t outputSamples = static_cast<size_t>(3) * kWidth * kHeight;
     if (MLFilter::LaunchYuv420ToFp16Planar(
-            deviceInput.data, deviceOutput.data, kWidth, kHeight, conversion, nullptr) != cudaSuccess) {
+            deviceTightInput.data, rowBytes, yBytes, rowBytes,
+            deviceOutput.data, kWidth, kHeight, conversion, nullptr) != cudaSuccess) {
         printf("CUDA conversion launch failed: %s\n", cudaGetErrorString(cudaGetLastError()));
         return false;
     }
@@ -183,52 +360,97 @@ auto RunConversionTest(MLFilter::Yuv420Format format, bool bt709, Pattern patter
         static_cast<const uint16_t *>(reference->g),
         static_cast<const uint16_t *>(reference->b),
     };
-    size_t exact = 0;
-    unsigned maximumDelta = 0;
-    int maximumPlane = 0, maximumX = 0, maximumY = 0;
-    for (int plane = 0; plane < 3; ++plane) {
-        for (int y = 0; y < kHeight; ++y) {
-            const auto *row = reinterpret_cast<const uint16_t *>(
-                reinterpret_cast<const unsigned char *>(planes[plane]) +
-                static_cast<ptrdiff_t>(y) * reference->strideBytes);
-            for (int x = 0; x < kWidth; ++x) {
-                const uint16_t expected = ClampHalf(row[x]);
-                const uint16_t actual =
-                    gpu[(static_cast<size_t>(plane) * kHeight + y) * kWidth + x];
-                if (expected == actual) ++exact;
-                const unsigned delta = expected > actual ? expected - actual : actual - expected;
-                if (delta > maximumDelta) {
-                    maximumDelta = delta;
-                    maximumPlane = plane;
-                    maximumX = x;
-                    maximumY = y;
-                }
-            }
-        }
-    }
+    const ConversionComparison softwareComparison =
+        CompareWithReference(gpu, planes, reference->strideBytes);
 
     const char *formatName = p010 ? "P010" : "NV12";
     const char *matrixName = bt709 ? "BT.709" : "BT.601";
-    printf("  %s %s %-8s: %.5f%% exact, max FP16 code delta %u\n",
-           formatName, matrixName, PatternName(pattern),
-           100.0 * exact / outputSamples, maximumDelta);
-    if (maximumDelta > 1) {
+    printf("  %s %s %-8s %-8s: %.5f%% exact, max FP16 code delta %u\n",
+           formatName, matrixName, PatternName(pattern), "software",
+           100.0 * softwareComparison.exact / outputSamples,
+           softwareComparison.maximumDelta);
+    if (softwareComparison.maximumDelta > 1) {
         printf("    mismatch at plane %d, x=%d, y=%d\n",
-               maximumPlane, maximumX, maximumY);
+               softwareComparison.maximumPlane,
+               softwareComparison.maximumX,
+               softwareComparison.maximumY);
         return false;
     }
+
+    ComRef<ID3D11Texture2D> d3dTexture;
+    if (!CreateD3D11InputTexture(d3dDevice, frame, format, d3dTexture)) {
+        printf("D3D11 input texture creation failed\n");
+        return false;
+    }
+
+    if (!d3dInput.Upload(d3dTexture.Get(), 0, d3dDevice, d3dContext, nullptr,
+                         conversion, deviceOutput.data, nullptr,
+                         uploadedEvent, preprocessedEvent)) {
+        printf("D3D11/CUDA integration upload failed\n");
+        return false;
+    }
+
+    std::vector<uint16_t> d3d(outputSamples);
+    if (cudaMemcpy(d3d.data(), deviceOutput.data, outputBytes,
+                   cudaMemcpyDeviceToHost) != cudaSuccess) {
+        printf("D3D11 result download failed: %s\n",
+               cudaGetErrorString(cudaGetLastError()));
+        return false;
+    }
+
+    const ConversionComparison d3dComparison =
+        CompareWithReference(d3d, planes, reference->strideBytes);
+
+    printf("  %s %s %-8s %-8s: %.5f%% exact, max FP16 code delta %u\n",
+           formatName, matrixName, PatternName(pattern), "D3D11",
+           100.0 * d3dComparison.exact / outputSamples,
+           d3dComparison.maximumDelta);
+    if (d3dComparison.maximumDelta > 1) {
+        printf("    D3D11 mismatch at plane %d, x=%d, y=%d\n",
+               d3dComparison.maximumPlane,
+               d3dComparison.maximumX,
+               d3dComparison.maximumY);
+        return false;
+    }
+
+    if (d3d != gpu) {
+        printf("    D3D11 output differs from software output\n");
+        return false;
+    }
+
     return true;
 }
 
 }
 
 auto main() -> int {
-    printf("MLFilter GPU conversion tests\n");
+    printf("MLFilter software/D3D11 GPU conversion tests\n");
+
+    ComRef<ID3D11Device> d3dDevice;
+    ComRef<ID3D11DeviceContext> d3dContext;
+    if (!CreateD3D11TestDevice(d3dDevice, d3dContext)) {
+        printf("Could not create a D3D11 device on the current CUDA adapter\n");
+        return 1;
+    }
+
+    CudaEvent uploadedEvent;
+    CudaEvent preprocessedEvent;
+    if (cudaEventCreate(&uploadedEvent.value) != cudaSuccess ||
+        cudaEventCreate(&preprocessedEvent.value) != cudaSuccess) {
+        printf("CUDA event creation failed: %s\n", cudaGetErrorString(cudaGetLastError()));
+        return 1;
+    }
+
+    MLFilter::D3D11CudaInput d3dInput(kWidth, kHeight);
     int failures = 0;
     int total = 0;
     const auto run = [&](MLFilter::Yuv420Format format, bool bt709, Pattern pattern) {
         ++total;
-        if (!RunConversionTest(format, bt709, pattern)) ++failures;
+        if (!RunConversionTest(format, bt709, pattern,
+                               d3dDevice.Get(), d3dContext.Get(), d3dInput,
+                               uploadedEvent.value, preprocessedEvent.value)) {
+            ++failures;
+        }
     };
     for (const Pattern pattern : { Pattern::Gradient, Pattern::Random, Pattern::Extremes }) {
         run(MLFilter::Yuv420Format::NV12, false, pattern);

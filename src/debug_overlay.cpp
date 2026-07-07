@@ -78,8 +78,13 @@ auto DebugOverlay::SetStreamInfo(std::string engineFileName, int inputWidth, int
                   inputWidth, inputHeight, inputFormat, bt709 ? "709" : "601",
                   fullRange ? "FULL" : "LIMITED");
     _inputLine = line;
+    _transportLine = "TRANSPORT: HOST COPY";
     std::snprintf(line, sizeof(line), "OUTPUT: %dx%d", outputWidth, outputHeight);
     _outputLine = line;
+}
+
+auto DebugOverlay::SetTransportInfo(std::string transportLine) -> void {
+    _transportLine = std::move(transportLine);
 }
 
 auto DebugOverlay::Draw(uint8_t *frame, size_t stride, int width, int height,
@@ -123,7 +128,7 @@ auto DebugOverlay::Draw(uint8_t *frame, size_t stride, int width, int height,
     const size_t longestLine = std::max<size_t>(_engineLine.size(), 76);
     const int desiredPanelWidth = 16 + static_cast<int>(longestLine) * glyphAdvance;
     const int panelWidth = std::min(width, desiredPanelWidth);
-    const int panelHeight = std::min(height, 428);
+    const int panelHeight = std::min(height, 488);
 
     for (int y = 0; y < panelHeight; ++y) {
         std::memset(frame + static_cast<size_t>(y) * stride, 0,
@@ -141,19 +146,20 @@ auto DebugOverlay::Draw(uint8_t *frame, size_t stride, int width, int height,
     DrawText(frame, stride, width, height, 8, 68, _engineLine);
     DrawText(frame, stride, width, height, 8, 98, _inputLine);
     DrawText(frame, stride, width, height, 8, 128, _outputLine);
+    DrawText(frame, stride, width, height, 8, 158, _transportLine);
 
     std::snprintf(line, sizeof(line),
                   "DMA CACHE: %zu/%zu  TRANS %llu  FAIL %llu",
                   t.outputCacheSize, t.outputCacheCapacity,
                   static_cast<unsigned long long>(t.outputTransientTransfers),
                   static_cast<unsigned long long>(t.outputRegistrationFailures));
-    DrawText(frame, stride, width, height, 8, 158, line);
+    DrawText(frame, stride, width, height, 8, 188, line);
 
     // A blank row separates stream information from the live metrics.
     for (size_t i = 0; i < labels.size(); ++i) {
         std::snprintf(line, sizeof(line), "%-14s %7.3F MS (MAX %.3F)",
                       labels[i].data(), _displayedAverages[i], _displayedMaximums[i]);
-        DrawText(frame, stride, width, height, 8, 218 + static_cast<int>(i) * 30, line);
+        DrawText(frame, stride, width, height, 8, 248 + static_cast<int>(i) * 30, line);
     }
 }
 

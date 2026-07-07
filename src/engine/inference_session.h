@@ -8,7 +8,13 @@
 #include <string>
 #include <vector>
 
+#include <windows.h>
+
 #include "color/yuv420_format.h"
+
+struct ID3D11Texture2D;
+struct ID3D11Device;
+struct ID3D11DeviceContext;
 
 namespace nvinfer1 {
 class IRuntime;
@@ -20,6 +26,8 @@ struct CUstream_st;
 struct CUevent_st;
 
 namespace MLFilter {
+
+class D3D11CudaInput;
 
 // Loads a serialized TensorRT engine and runs inference on the GPU. The engine is the
 // static, fp16, NCHW (1x3xHxW) engine produced by TensorRTEngineBuilder; input and output
@@ -60,6 +68,15 @@ public:
     // normalization, Catmull-Rom chroma reconstruction, matrix conversion, [0,1] clamping, and
     // fp16 packing on the GPU.
     auto UploadYuv420(const void *frame, const Yuv420Conversion &conversion) -> bool;
+
+    // Packs the decoder's D3D11 NV12/P010 texture slice into a CUDA-registerable buffer on the
+    // GPU, then runs preprocessing directly into TensorRT's fp16 RGB input.
+    auto UploadD3D11Yuv420(ID3D11Texture2D *texture,
+                           unsigned arraySlice,
+                           ID3D11Device *device,
+                           ID3D11DeviceContext *context,
+                           HANDLE contextMutex,
+                           const Yuv420Conversion &conversion) -> bool;
 
     // Runs the network and, on the same stream, the fp16-planar -> packed-RGB48 conversion kernel.
     // Returns false on a CUDA/TensorRT error.
@@ -122,6 +139,8 @@ private:
     static constexpr size_t kMaxCachedRegistrations = 32;
     uint64_t _outputTransientTransfers = 0;
     uint64_t _outputRegistrationFailures = 0;
+
+    std::unique_ptr<D3D11CudaInput> _d3d11Input;
 
     std::string _inputName;
     std::string _outputName;

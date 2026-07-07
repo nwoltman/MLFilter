@@ -12,6 +12,8 @@ param(
     [int]$Height = 1080,
     [ValidateSet("nv12", "p010")]
     [string]$Format = "nv12",
+    [ValidateSet("software", "d3d11")]
+    [string]$Upload = "software",
 
     # ONNX model to build the engine from. Empty -> use the model configured in MLFilter's
     # settings (HKCU\Software\MLFilter\HDModelPath), same as the filter does during playback.
@@ -62,7 +64,7 @@ $cudaBin = @((Join-Path $env:CUDA_PATH "bin\x64"), (Join-Path $env:CUDA_PATH "bi
 $env:PATH = "$trtBin;$cudaBin;$env:PATH"
 
 # --- Run -----------------------------------------------------------------------------
-$arguments = @("--width", $Width, "--height", $Height, "--format", $Format,
+$arguments = @("--width", $Width, "--height", $Height, "--format", $Format, "--upload", $Upload,
                "--frames", $Frames, "--warmup", $Warmup)
 if ($Model) { $arguments += @("--model", $Model) }
 

@@ -3,6 +3,7 @@
 #include "frame_processor.h"
 
 #include <chrono>
+#include <cstdio>
 
 #include <streams.h>
 
@@ -24,6 +25,69 @@ auto OverlayFileName(const std::filesystem::path &path) -> std::string {
     }
 
     return result;
+}
+
+class ComTextureRef {
+public:
+    ~ComTextureRef() {
+        if (_texture != nullptr) {
+            _texture->Release();
+        }
+    }
+
+    auto Address() -> ID3D11Texture2D ** { return &_texture; }
+    auto Get() const -> ID3D11Texture2D * { return _texture; }
+
+private:
+    ID3D11Texture2D *_texture = nullptr;
+};
+
+template <typename T>
+class ComRef {
+public:
+    ~ComRef() {
+        if (_object != nullptr) {
+            _object->Release();
+        }
+    }
+
+    auto Address() -> T ** { return &_object; }
+    auto Get() const -> T * { return _object; }
+
+    auto Attach(T *object) -> void {
+        if (_object != nullptr) {
+            _object->Release();
+        }
+
+        _object = object;
+    }
+
+private:
+    T *_object = nullptr;
+};
+
+auto DxgiFormatForInput(Yuv420Format format) -> DXGI_FORMAT {
+    return format == Yuv420Format::P010 ? DXGI_FORMAT_P010 : DXGI_FORMAT_NV12;
+}
+
+auto TextureFormatName(DXGI_FORMAT format) -> const char * {
+    if (format == DXGI_FORMAT_NV12) {
+        return "NV12";
+    }
+    if (format == DXGI_FORMAT_P010) {
+        return "P010";
+    }
+    return "UNKNOWN";
+}
+
+auto Yuv420FormatName(Yuv420Format format) -> const char * {
+    return format == Yuv420Format::P010 ? "P010" : "NV12";
+}
+
+auto TransportFallbackLine(Yuv420Format format) -> std::string {
+    char line[64] {};
+    std::snprintf(line, sizeof(line), "TRANSPORT: HOST COPY %s", Yuv420FormatName(format));
+    return line;
 }
 
 }
@@ -60,15 +124,75 @@ auto FrameProcessor::Create(const std::filesystem::path &enginePath,
 FrameProcessor::~FrameProcessor() = default;
 
 auto FrameProcessor::Process(IMediaSample *in, IMediaSample *out, bool showDebugOverlay,
-                             double previousFrameMs, double &overlayOverheadMs) -> HRESULT {
+                             double previousFrameMs, double &overlayOverheadMs,
+                             const D3D11DecoderState *d3d11State) -> HRESULT {
     overlayOverheadMs = 0;
 
-    BYTE *srcBuffer = nullptr;
-    if (FAILED(in->GetPointer(&srcBuffer)) || srcBuffer == nullptr) {
-        return E_FAIL;
+    bool uploaded = false;
+
+    IMediaSampleD3D11 *d3d11Sample = nullptr;
+    if (SUCCEEDED(in->QueryInterface(__uuidof(IMediaSampleD3D11),
+                                     reinterpret_cast<void **>(&d3d11Sample))) &&
+        d3d11Sample != nullptr) {
+        ComTextureRef texture;
+        UINT arraySlice = 0;
+        const HRESULT textureHr = d3d11Sample->GetD3D11Texture(0, texture.Address(), &arraySlice);
+        d3d11Sample->Release();
+
+        if (FAILED(textureHr) || texture.Get() == nullptr) {
+            return E_FAIL;
+        }
+
+        D3D11_TEXTURE2D_DESC desc {};
+        texture.Get()->GetDesc(&desc);
+        if (desc.Format != DxgiFormatForInput(_conversion.format)) {
+            return VFW_E_TYPE_NOT_ACCEPTED;
+        }
+
+        ComRef<ID3D11Device> device;
+        if (d3d11State != nullptr && d3d11State->device != nullptr) {
+            d3d11State->device->AddRef();
+            device.Attach(d3d11State->device);
+        } else {
+            texture.Get()->GetDevice(device.Address());
+        }
+        if (device.Get() == nullptr) {
+            return E_FAIL;
+        }
+
+        ComRef<ID3D11DeviceContext> context;
+        if (d3d11State != nullptr && d3d11State->context != nullptr) {
+            d3d11State->context->AddRef();
+            context.Attach(d3d11State->context);
+        } else {
+            device.Get()->GetImmediateContext(context.Address());
+        }
+        if (context.Get() == nullptr) {
+            return E_FAIL;
+        }
+
+        if (_session->UploadD3D11Yuv420(texture.Get(), arraySlice, device.Get(), context.Get(),
+                                        d3d11State != nullptr ? d3d11State->mutex : nullptr,
+                                        _conversion)) {
+            char transportLine[128] {};
+            std::snprintf(transportLine, sizeof(transportLine),
+                          "TRANSPORT: D3D11 NATIVE %s",
+                          TextureFormatName(desc.Format));
+            _debugOverlay.SetTransportInfo(transportLine);
+            uploaded = true;
+        }
+
+    } else {
+        BYTE *srcBuffer = nullptr;
+        if (FAILED(in->GetPointer(&srcBuffer)) || srcBuffer == nullptr) {
+            return E_FAIL;
+        }
+
+        _debugOverlay.SetTransportInfo(TransportFallbackLine(_conversion.format));
+        uploaded = _session->UploadYuv420(srcBuffer, _conversion);
     }
 
-    if (!_session->UploadYuv420(srcBuffer, _conversion) || !_session->Infer()) {
+    if (!uploaded || !_session->Infer()) {
         return E_FAIL;
     }
 

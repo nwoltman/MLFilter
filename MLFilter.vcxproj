@@ -34,18 +34,22 @@
     </ClCompile>
     <Link>
       <ModuleDefinitionFile>src\mlfilter.def</ModuleDefinitionFile>
-      <AdditionalDependencies>strmiids.lib;winmm.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>strmiids.lib;winmm.lib;d3d11.lib;dxgi.lib;cuda.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="src\constants.h" />
+    <ClInclude Include="src\d3d11_native_interfaces.h" />
     <ClInclude Include="src\debug_overlay.h" />
     <ClInclude Include="src\filter.h" />
     <ClInclude Include="src\formats.h" />
     <ClInclude Include="src\frame_processor.h" />
     <ClInclude Include="src\hotkey_listener.h" />
+    <ClInclude Include="src\input_pin.h" />
     <ClInclude Include="src\output_pin.h" />
     <ClInclude Include="src\color\yuv420_format.h" />
+    <ClInclude Include="src\engine\cuda_raii.h" />
+    <ClInclude Include="src\engine\d3d11_cuda_input.h" />
     <ClInclude Include="src\engine\inference_session.h" />
     <ClInclude Include="src\guids.h" />
     <ClInclude Include="src\progress_window.h" />
@@ -58,6 +62,8 @@
     <ClInclude Include="src\engine\fp16_kernels.h" />
     <ClInclude Include="src\engine\gpu_info.h" />
     <ClInclude Include="src\engine\onnx_fp16.h" />
+    <ClInclude Include="src\engine\shaders\pack_planes_nv12_bytecode.h" />
+    <ClInclude Include="src\engine\shaders\pack_planes_p010_bytecode.h" />
     <ClInclude Include="src\engine\tensorrt_engine_builder.h" />
   </ItemGroup>
   <ItemGroup>
@@ -69,7 +75,9 @@
     <ClCompile Include="src\formats.cpp" />
     <ClCompile Include="src\frame_processor.cpp" />
     <ClCompile Include="src\hotkey_listener.cpp" />
+    <ClCompile Include="src\input_pin.cpp" />
     <ClCompile Include="src\output_pin.cpp" />
+    <ClCompile Include="src\engine\d3d11_cuda_input.cpp" />
     <ClCompile Include="src\engine\inference_session.cpp" />
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\progress_window.cpp" />
@@ -86,6 +94,7 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="src\mlfilter.def" />
+    <None Include="src\engine\shaders\pack_planes.hlsl" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="deps\baseclasses\baseclasses.vcxproj">

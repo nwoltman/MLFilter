@@ -7,9 +7,11 @@
 #include <fstream>
 #include <vector>
 
+#include <cuda.h>
 #include <cuda_runtime.h>
 #include <NvInfer.h>
 
+#include "d3d11_cuda_input.h"
 #include "fp16_kernels.h"
 
 namespace MLFilter {
@@ -143,6 +145,7 @@ auto InferenceSession::Create(const std::filesystem::path &enginePath, std::wstr
 
 InferenceSession::~InferenceSession() {
     UnregisterOutputBuffers();
+    _d3d11Input.reset();
 
     if (_evStart != nullptr) {
         cudaEventDestroy(_evStart);
@@ -177,17 +180,40 @@ InferenceSession::~InferenceSession() {
 
 auto InferenceSession::UploadYuv420(const void *frame, const Yuv420Conversion &conversion) -> bool {
     cudaEventRecord(_evStart, _stream);
+
     const size_t sampleBytes = conversion.format == Yuv420Format::P010 ? 2 : 1;
-    const size_t frameBytes = static_cast<size_t>(_inW) * _inH * 3 / 2 * sampleBytes;
+    const size_t pitchBytes = static_cast<size_t>(_inW) * sampleBytes;
+    const size_t yBytes = pitchBytes * _inH;
+    const size_t frameBytes = yBytes + pitchBytes * (_inH / 2);
     if (cudaMemcpyAsync(_dYuv, frame, frameBytes, cudaMemcpyHostToDevice, _stream) != cudaSuccess) {
         return false;
     }
+
     cudaEventRecord(_evUploaded, _stream);
-    if (LaunchYuv420ToFp16Planar(_dYuv, _dInput, _inW, _inH, conversion, _stream) != cudaSuccess) {
+
+    if (LaunchYuv420ToFp16Planar(
+            _dYuv, pitchBytes, yBytes, pitchBytes, _dInput,
+            _inW, _inH, conversion, _stream) != cudaSuccess) {
         return false;
     }
+
     cudaEventRecord(_evPreprocessed, _stream);
     return true;
+}
+
+auto InferenceSession::UploadD3D11Yuv420(ID3D11Texture2D *texture,
+                                         unsigned arraySlice,
+                                         ID3D11Device *device,
+                                         ID3D11DeviceContext *context,
+                                         HANDLE contextMutex,
+                                         const Yuv420Conversion &conversion) -> bool {
+    cudaEventRecord(_evStart, _stream);
+    if (_d3d11Input == nullptr) {
+        _d3d11Input = std::make_unique<D3D11CudaInput>(_inW, _inH);
+    }
+
+    return _d3d11Input->Upload(texture, arraySlice, device, context, contextMutex, conversion, _dInput,
+                               _stream, _evUploaded, _evPreprocessed);
 }
 
 auto InferenceSession::Infer() -> bool {

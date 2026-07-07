@@ -29,17 +29,26 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
+      <AdditionalDependencies>d3d11.lib;dxgi.lib;cuda.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="conversion_tests.cpp" />
     <ClCompile Include="helpers\zimg_reference.cpp" />
+    <ClCompile Include="..\src\engine\d3d11_cuda_input.cpp" />
     <CudaCompile Include="..\src\engine\fp16_kernels.cu" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\color\yuv420_format.h" />
     <ClInclude Include="helpers\zimg_reference.h" />
+    <ClInclude Include="..\src\engine\cuda_raii.h" />
+    <ClInclude Include="..\src\engine\d3d11_cuda_input.h" />
     <ClInclude Include="..\src\engine\fp16_kernels.h" />
+    <ClInclude Include="..\src\engine\shaders\pack_planes_nv12_bytecode.h" />
+    <ClInclude Include="..\src\engine\shaders\pack_planes_p010_bytecode.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\src\engine\shaders\pack_planes.hlsl" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\deps\zimg\_msvc\zimg\zimg.vcxproj">

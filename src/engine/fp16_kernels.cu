@@ -37,9 +37,16 @@ __device__ inline auto MirrorIndex(int i, int length) -> int {
 }
 
 template <typename T>
-__device__ auto ReconstructFloatChroma(const T *uv, int chromaWidth, int chromaHeight,
-                                       int x, int y, int component, int shift,
-                                       float scale, float offset) -> float {
+__device__ auto ReconstructFloatChroma(const unsigned char *uv,
+                                       size_t uvPitchBytes,
+                                       int chromaWidth,
+                                       int chromaHeight,
+                                       int x,
+                                       int y,
+                                       int component,
+                                       int shift,
+                                       float scale,
+                                       float offset) -> float {
     const int cx = x >> 1;
     const int cy = y >> 1;
     // zimg treats MPEG-2 4:2:0 chroma as vertically centred between each pair of
@@ -61,8 +68,9 @@ __device__ auto ReconstructFloatChroma(const T *uv, int chromaWidth, int chromaH
     const auto sample = [&](int sx, int sy) {
         sx = MirrorIndex(sx, chromaWidth);
         sy = MirrorIndex(sy, chromaHeight);
+        const auto *row = reinterpret_cast<const T *>(uv + static_cast<size_t>(sy) * uvPitchBytes);
         const float code = static_cast<float>(
-            uv[(static_cast<size_t>(sy) * chromaWidth + sx) * 2 + component] >> shift);
+            row[static_cast<size_t>(sx) * 2 + component] >> shift);
         return fmaf(code, scale, offset);
     };
 #pragma unroll
@@ -86,9 +94,16 @@ __device__ auto ReconstructFloatChroma(const T *uv, int chromaWidth, int chromaH
     return even + odd;
 }
 
-template <typename T>
-__global__ void Yuv420ToFp16PlanarKernel(const T *src, __half *dst, int width, int height,
-                                         int shift, bool bt709, bool fullRange) {
+template <typename T, int SHIFT>
+__global__ void Yuv420ToFp16PlanarKernel(const unsigned char *src,
+                                         size_t yPitchBytes,
+                                         size_t uvOffsetBytes,
+                                         size_t uvPitchBytes,
+                                         __half *dst,
+                                         int width,
+                                         int height,
+                                         bool bt709,
+                                         bool fullRange) {
     const int x = blockIdx.x * blockDim.x + threadIdx.x;
     const int y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x >= width || y >= height) {
@@ -96,34 +111,39 @@ __global__ void Yuv420ToFp16PlanarKernel(const T *src, __half *dst, int width, i
     }
 
     const size_t i = static_cast<size_t>(y) * width + x;
-    const T *uv = src + static_cast<size_t>(width) * height;
+    const auto *yRow = reinterpret_cast<const T *>(src + static_cast<size_t>(y) * yPitchBytes);
+    const unsigned char *uv = src + uvOffsetBytes;
     const int depth = sizeof(T) == 1 ? 8 : 10;
     const float codeScale = static_cast<float>(1 << (depth - 8));
     const float maximum = static_cast<float>((1 << depth) - 1);
     const float yOffset = fullRange ? 0.0f : 16.0f * codeScale;
     const float yRange = fullRange ? maximum : 219.0f * codeScale;
     // zimg stores scale/offset as float and evaluates scale*code+offset with FMA.
-    const float yy = fmaf(static_cast<float>(src[i] >> shift), 1.0f / yRange, -yOffset / yRange);
+    const float yy = fmaf(static_cast<float>(yRow[x] >> SHIFT), 1.0f / yRange, -yOffset / yRange);
     float cb, cr;
     if constexpr (sizeof(T) == 2) {
         const float scale = fullRange ? 1.0f / 1023.0f : 1.0f / 896.0f;
         const float offset = fullRange ? -512.0f / 1023.0f : -512.0f / 896.0f;
-        cb = ReconstructFloatChroma(uv, width / 2, height / 2, x, y, 0, shift,
-                                    scale, offset);
-        cr = ReconstructFloatChroma(uv, width / 2, height / 2, x, y, 1, shift,
-                                    scale, offset);
+        cb = ReconstructFloatChroma<T>(uv, uvPitchBytes, width / 2, height / 2,
+                                       x, y, 0, SHIFT,
+                                       scale, offset);
+        cr = ReconstructFloatChroma<T>(uv, uvPitchBytes, width / 2, height / 2,
+                                       x, y, 1, SHIFT,
+                                       scale, offset);
+    } else if (fullRange) {
+        cb = ReconstructFloatChroma<T>(uv, uvPitchBytes, width / 2, height / 2,
+                                       x, y, 0, SHIFT,
+                                       1.0f / 255.0f, -128.0f / 255.0f);
+        cr = ReconstructFloatChroma<T>(uv, uvPitchBytes, width / 2, height / 2,
+                                       x, y, 1, SHIFT,
+                                       1.0f / 255.0f, -128.0f / 255.0f);
     } else {
-        if (fullRange) {
-            cb = ReconstructFloatChroma(uv, width / 2, height / 2, x, y, 0, shift,
-                                        1.0f / 255.0f, -128.0f / 255.0f);
-            cr = ReconstructFloatChroma(uv, width / 2, height / 2, x, y, 1, shift,
-                                        1.0f / 255.0f, -128.0f / 255.0f);
-        } else {
-            cb = ReconstructFloatChroma(uv, width / 2, height / 2, x, y, 0, shift,
-                                        1.0f / 224.0f, -128.0f / 224.0f);
-            cr = ReconstructFloatChroma(uv, width / 2, height / 2, x, y, 1, shift,
-                                        1.0f / 224.0f, -128.0f / 224.0f);
-        }
+        cb = ReconstructFloatChroma<T>(uv, uvPitchBytes, width / 2, height / 2,
+                                       x, y, 0, SHIFT,
+                                       1.0f / 224.0f, -128.0f / 224.0f);
+        cr = ReconstructFloatChroma<T>(uv, uvPitchBytes, width / 2, height / 2,
+                                       x, y, 1, SHIFT,
+                                       1.0f / 224.0f, -128.0f / 224.0f);
     }
 
     // Coefficients are the float casts of zimg's double-precision BT.709/BT.470BG inverse
@@ -173,19 +193,32 @@ __global__ void Fp16PlanarToRgb48Kernel(const __half *r, const __half *g, const 
 
 }
 
-auto LaunchYuv420ToFp16Planar(const void *dYuv, void *dPlanarFp16, int width, int height,
-                              const Yuv420Conversion &conversion, cudaStream_t stream) -> cudaError_t {
+auto LaunchYuv420ToFp16Planar(const void *dYuv,
+                              size_t yPitchBytes,
+                              size_t uvOffsetBytes,
+                              size_t uvPitchBytes,
+                              void *dPlanarFp16,
+                              int width,
+                              int height,
+                              const Yuv420Conversion &conversion,
+                              cudaStream_t stream) -> cudaError_t {
     const dim3 block(32, 8);
     const dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
+
     if (conversion.format == Yuv420Format::NV12) {
-        Yuv420ToFp16PlanarKernel<<<grid, block, 0, stream>>>(
-            static_cast<const uint8_t *>(dYuv), static_cast<__half *>(dPlanarFp16),
-            width, height, 0, conversion.bt709, conversion.fullRange);
+        Yuv420ToFp16PlanarKernel<unsigned char, 0><<<grid, block, 0, stream>>>(
+            static_cast<const unsigned char *>(dYuv),
+            yPitchBytes, uvOffsetBytes, uvPitchBytes,
+            static_cast<__half *>(dPlanarFp16),
+            width, height, conversion.bt709, conversion.fullRange);
     } else {
-        Yuv420ToFp16PlanarKernel<<<grid, block, 0, stream>>>(
-            static_cast<const uint16_t *>(dYuv), static_cast<__half *>(dPlanarFp16),
-            width, height, 6, conversion.bt709, conversion.fullRange);
+        Yuv420ToFp16PlanarKernel<unsigned short, 6><<<grid, block, 0, stream>>>(
+            static_cast<const unsigned char *>(dYuv),
+            yPitchBytes, uvOffsetBytes, uvPitchBytes,
+            static_cast<__half *>(dPlanarFp16),
+            width, height, conversion.bt709, conversion.fullRange);
     }
+
     return cudaGetLastError();
 }
 
