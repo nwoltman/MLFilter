@@ -98,7 +98,7 @@ auto FrameProcessor::Process(IMediaSample *in, IMediaSample *out, bool showDebug
             const auto cache = _session->GetOutputCacheStatus();
             _debugOverlay.Draw(dstBuffer, static_cast<size_t>(stride), _outW, _outH,
                                {gpu.uploadMs, gpu.preprocessMs, gpu.inferenceMs,
-                                gpu.packMs, gpu.downloadMs, gpu.outputRegistrationMs,
+                                gpu.packMs, gpu.downloadMs,
                                 cache.cached, cache.capacity, cache.transientTransfers,
                                 cache.registrationFailures});
         }

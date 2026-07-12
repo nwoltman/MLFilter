@@ -85,10 +85,9 @@ auto DebugOverlay::SetStreamInfo(std::string engineFileName, int inputWidth, int
 auto DebugOverlay::Draw(uint8_t *frame, size_t stride, int width, int height,
                         const DebugOverlayTimings &t) -> void {
     const double pipeline = t.uploadMs + t.preprocessMs + t.inferenceMs +
-                            t.packMs + t.downloadMs + t.outputRegistrationMs;
-    const std::array<double, 7> current {
-        t.uploadMs, t.preprocessMs, t.inferenceMs, t.packMs, t.downloadMs,
-        t.outputRegistrationMs, pipeline
+                            t.packMs + t.downloadMs;
+    const std::array<double, 6> current {
+        t.uploadMs, t.preprocessMs, t.inferenceMs, t.packMs, t.downloadMs, pipeline
     };
 
     for (size_t i = 0; i < current.size(); ++i) {
@@ -133,9 +132,9 @@ auto DebugOverlay::Draw(uint8_t *frame, size_t stride, int width, int height,
                     static_cast<size_t>(panelWidth) * 3 * sizeof(uint16_t));
     }
 
-    constexpr std::array<std::string_view, 7> labels {
+    constexpr std::array<std::string_view, 6> labels {
         "UPLOAD", "PRE-PROCESS", "INFERENCE", "FP16 TO RGB48",
-        "DOWNLOAD", "PIN/UNPIN", "PIPELINE"
+        "DOWNLOAD", "PIPELINE"
     };
 
     char line[128] {};

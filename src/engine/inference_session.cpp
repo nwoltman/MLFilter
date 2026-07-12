@@ -3,7 +3,6 @@
 #include "inference_session.h"
 
 #include <algorithm>
-#include <chrono>
 #include <cstdint>
 #include <fstream>
 #include <vector>
@@ -208,7 +207,6 @@ auto InferenceSession::Infer() -> bool {
 auto InferenceSession::Download(void *hostOutput, size_t dstStrideBytes, size_t hostBufferBytes) -> bool {
     // The packed RGB48 result is tightly stored (width*3 uint16 per row); copy it straight into the
     // output sample, expanding each row to the allocator's (possibly padded) destination pitch.
-    const auto registrationBegin = std::chrono::steady_clock::now();
     bool registeredOutput = false;
     bool transientRegistration = false;
 
@@ -236,9 +234,6 @@ auto InferenceSession::Download(void *hostOutput, size_t dstStrideBytes, size_t 
         }
     }
 
-    const auto registrationEnd = std::chrono::steady_clock::now();
-    _outputRegistrationMs =
-        std::chrono::duration<double, std::milli>(registrationEnd - registrationBegin).count();
     const size_t rowBytes = static_cast<size_t>(_outW) * 3 * sizeof(uint16_t);
     const bool copyQueued =
         cudaMemcpy2DAsync(hostOutput, dstStrideBytes, _dRgb48, rowBytes, rowBytes, _outH,
@@ -250,12 +245,7 @@ auto InferenceSession::Download(void *hostOutput, size_t dstStrideBytes, size_t 
     }
 
     if (transientRegistration) {
-        const auto unregistrationBegin = std::chrono::steady_clock::now();
         cudaHostUnregister(hostOutput);
-        const auto unregistrationEnd = std::chrono::steady_clock::now();
-        _outputRegistrationMs +=
-            std::chrono::duration<double, std::milli>(
-                unregistrationEnd - unregistrationBegin).count();
     }
 
     return synchronized;
@@ -298,7 +288,6 @@ auto InferenceSession::LastGpuTimings(GpuStageTimings &timings) const -> bool {
     timings.inferenceMs = inference;
     timings.packMs = pack;
     timings.downloadMs = download;
-    timings.outputRegistrationMs = _outputRegistrationMs;
     return true;
 }
 

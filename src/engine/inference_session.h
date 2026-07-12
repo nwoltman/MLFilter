@@ -90,7 +90,6 @@ public:
         double inferenceMs = 0;
         double packMs = 0;
         double downloadMs = 0;
-        double outputRegistrationMs = 0;
     };
     auto LastGpuTimings(GpuStageTimings &timings) const -> bool;
 
@@ -114,8 +113,6 @@ private:
     void *_dYuv = nullptr;
     void *_dOutput = nullptr;
     void *_dRgb48 = nullptr;
-
-    double _outputRegistrationMs = 0;
 
     struct HostRegistration {
         void *address = nullptr;
