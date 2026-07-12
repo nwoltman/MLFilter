@@ -70,6 +70,7 @@ private:
     std::atomic<bool> _removalScheduled = false;
     bool _inputFormatSupported = true;
     bool _inputFormatErrorReported = false;
+    double _previousFrameMs = -1;
     std::wstring _inputFormatDescription;
 };
 

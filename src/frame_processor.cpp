@@ -2,6 +2,8 @@
 
 #include "frame_processor.h"
 
+#include <chrono>
+
 #include <streams.h>
 
 #include "formats.h"
@@ -57,7 +59,10 @@ auto FrameProcessor::Create(const std::filesystem::path &enginePath,
 
 FrameProcessor::~FrameProcessor() = default;
 
-auto FrameProcessor::Process(IMediaSample *in, IMediaSample *out, bool showDebugOverlay) -> HRESULT {
+auto FrameProcessor::Process(IMediaSample *in, IMediaSample *out, bool showDebugOverlay,
+                             double previousFrameMs, double &overlayOverheadMs) -> HRESULT {
+    overlayOverheadMs = 0;
+
     BYTE *srcBuffer = nullptr;
     if (FAILED(in->GetPointer(&srcBuffer)) || srcBuffer == nullptr) {
         return E_FAIL;
@@ -92,16 +97,22 @@ auto FrameProcessor::Process(IMediaSample *in, IMediaSample *out, bool showDebug
         return E_FAIL;
     }
 
-    if (showDebugOverlay) {
+    if (showDebugOverlay && previousFrameMs >= 0) {
+        const auto overlayBegin = std::chrono::steady_clock::now();
+
         InferenceSession::GpuStageTimings gpu {};
         if (_session->LastGpuTimings(gpu)) {
             const auto cache = _session->GetOutputCacheStatus();
             _debugOverlay.Draw(dstBuffer, static_cast<size_t>(stride), _outW, _outH,
                                {gpu.uploadMs, gpu.preprocessMs, gpu.inferenceMs,
-                                gpu.packMs, gpu.downloadMs,
+                                gpu.packMs, gpu.downloadMs, previousFrameMs,
                                 cache.cached, cache.capacity, cache.transientTransfers,
                                 cache.registrationFailures});
         }
+
+        const auto overlayEnd = std::chrono::steady_clock::now();
+        overlayOverheadMs =
+            std::chrono::duration<double, std::milli>(overlayEnd - overlayBegin).count();
     }
 
     out->SetActualDataLength(stride * _outH);

@@ -84,10 +84,8 @@ auto DebugOverlay::SetStreamInfo(std::string engineFileName, int inputWidth, int
 
 auto DebugOverlay::Draw(uint8_t *frame, size_t stride, int width, int height,
                         const DebugOverlayTimings &t) -> void {
-    const double pipeline = t.uploadMs + t.preprocessMs + t.inferenceMs +
-                            t.packMs + t.downloadMs;
     const std::array<double, 6> current {
-        t.uploadMs, t.preprocessMs, t.inferenceMs, t.packMs, t.downloadMs, pipeline
+        t.uploadMs, t.preprocessMs, t.inferenceMs, t.packMs, t.downloadMs, t.pipelineMs
     };
 
     for (size_t i = 0; i < current.size(); ++i) {

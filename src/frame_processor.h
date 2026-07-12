@@ -40,7 +40,8 @@ public:
 
     // Converts + infers + packs one frame's pixels into out (RGB48, top-down). Does not touch
     // timestamps/flags — the caller copies those. Returns an HRESULT.
-    auto Process(IMediaSample *in, IMediaSample *out, bool showDebugOverlay) -> HRESULT;
+    auto Process(IMediaSample *in, IMediaSample *out, bool showDebugOverlay,
+                 double previousFrameMs, double &overlayOverheadMs) -> HRESULT;
 
     auto UnregisterOutputBuffers() -> void;
 

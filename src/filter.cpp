@@ -3,6 +3,7 @@
 #include "filter.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <thread>
@@ -451,6 +452,8 @@ auto CMLFilter::GetPin(int n) -> CBasePin * {
 }
 
 auto CMLFilter::Transform(IMediaSample *pIn, IMediaSample *pOut) -> HRESULT {
+    const auto frameBegin = std::chrono::steady_clock::now();
+
     CheckPointer(pIn, E_POINTER);
     CheckPointer(pOut, E_POINTER);
 
@@ -490,8 +493,19 @@ auto CMLFilter::Transform(IMediaSample *pIn, IMediaSample *pOut) -> HRESULT {
         return VFW_E_TYPE_NOT_ACCEPTED;
     }
 
-    return _processor->Process(
-        pIn, pOut, _debugOverlayEnabled.load(std::memory_order_relaxed));
+    double overlayOverheadMs = 0;
+    const HRESULT result = _processor->Process(
+        pIn, pOut, _debugOverlayEnabled.load(std::memory_order_relaxed), _previousFrameMs,
+        overlayOverheadMs);
+
+    const auto frameEnd = std::chrono::steady_clock::now();
+    const double totalFrameMs =
+        std::chrono::duration<double, std::milli>(frameEnd - frameBegin).count();
+    _previousFrameMs = totalFrameMs > overlayOverheadMs
+        ? totalFrameMs - overlayOverheadMs
+        : 0;
+
+    return result;
 }
 
 auto CMLFilter::CompleteConnect(PIN_DIRECTION direction, IPin *pReceivePin) -> HRESULT {
@@ -601,6 +615,11 @@ auto CMLFilter::SetupProcessorForInput() -> HRESULT {
 
     std::wstring error;
     _processor = FrameProcessor::Create(builder.EnginePath(request), kind, bt709, fullRange, error);
+
+    if (_processor != nullptr) {
+        _previousFrameMs = -1;
+    }
+
     return _processor != nullptr ? S_OK : S_FALSE;
 }
 
