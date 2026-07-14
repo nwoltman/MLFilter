@@ -254,8 +254,6 @@ auto InferenceSession::Download(void *hostOutput, size_t dstStrideBytes, size_t 
                     transientRegistration = true;
                     ++_outputTransientTransfers;
                 }
-            } else {
-                ++_outputRegistrationFailures;
             }
         }
     }
@@ -286,7 +284,6 @@ auto InferenceSession::UnregisterOutputBuffers() -> void {
 
     _hostRegistrations.clear();
     _outputTransientTransfers = 0;
-    _outputRegistrationFailures = 0;
 }
 
 auto InferenceSession::GetOutputCacheStatus() const -> OutputCacheStatus {
@@ -294,7 +291,6 @@ auto InferenceSession::GetOutputCacheStatus() const -> OutputCacheStatus {
         .cached = _hostRegistrations.size(),
         .capacity = kMaxCachedRegistrations,
         .transientTransfers = _outputTransientTransfers,
-        .registrationFailures = _outputRegistrationFailures,
     };
 }
 

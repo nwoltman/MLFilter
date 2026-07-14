@@ -149,10 +149,9 @@ auto DebugOverlay::Draw(uint8_t *frame, size_t stride, int width, int height,
     DrawText(frame, stride, width, height, 8, 158, _transportLine);
 
     std::snprintf(line, sizeof(line),
-                  "DMA CACHE: %zu/%zu  TRANS %llu  FAIL %llu",
+                  "DMA CACHE: %zu/%zu  TRANSIENT REGISTRATIONS %llu",
                   t.outputCacheSize, t.outputCacheCapacity,
-                  static_cast<unsigned long long>(t.outputTransientTransfers),
-                  static_cast<unsigned long long>(t.outputRegistrationFailures));
+                  static_cast<unsigned long long>(t.outputTransientTransfers));
     DrawText(frame, stride, width, height, 8, 188, line);
 
     // A blank row separates stream information from the live metrics.

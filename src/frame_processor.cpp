@@ -230,8 +230,7 @@ auto FrameProcessor::Process(IMediaSample *in, IMediaSample *out, bool showDebug
             _debugOverlay.Draw(dstBuffer, static_cast<size_t>(stride), _outW, _outH,
                                {gpu.uploadMs, gpu.preprocessMs, gpu.inferenceMs,
                                 gpu.packMs, gpu.downloadMs, previousFrameMs,
-                                cache.cached, cache.capacity, cache.transientTransfers,
-                                cache.registrationFailures});
+                                cache.cached, cache.capacity, cache.transientTransfers});
         }
 
         const auto overlayEnd = std::chrono::steady_clock::now();

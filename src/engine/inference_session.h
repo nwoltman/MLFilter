@@ -93,7 +93,6 @@ public:
         size_t cached = 0;
         size_t capacity = 0;
         uint64_t transientTransfers = 0;
-        uint64_t registrationFailures = 0;
     };
     auto GetOutputCacheStatus() const -> OutputCacheStatus;
 
@@ -138,7 +137,6 @@ private:
     std::vector<HostRegistration> _hostRegistrations;
     static constexpr size_t kMaxCachedRegistrations = 32;
     uint64_t _outputTransientTransfers = 0;
-    uint64_t _outputRegistrationFailures = 0;
 
     std::unique_ptr<D3D11CudaInput> _d3d11Input;
 

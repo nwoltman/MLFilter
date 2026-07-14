@@ -11,7 +11,7 @@ namespace MLFilter {
 struct DebugOverlayTimings {
     double uploadMs, preprocessMs, inferenceMs, packMs, downloadMs, pipelineMs;
     size_t outputCacheSize, outputCacheCapacity;
-    uint64_t outputTransientTransfers, outputRegistrationFailures;
+    uint64_t outputTransientTransfers;
 };
 
 class DebugOverlay {
