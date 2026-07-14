@@ -36,65 +36,139 @@ __device__ inline auto MirrorIndex(int i, int length) -> int {
     return i;
 }
 
-template <typename T>
-__device__ auto ReconstructFloatChroma(const unsigned char *uv,
-                                       size_t uvPitchBytes,
-                                       int chromaWidth,
-                                       int chromaHeight,
-                                       int x,
-                                       int y,
-                                       int component,
-                                       int shift,
-                                       float scale,
-                                       float offset) -> float {
-    const int cx = x >> 1;
-    const int cy = y >> 1;
-    // zimg treats MPEG-2 4:2:0 chroma as vertically centred between each pair of
-    // luma rows. Consequently, even and odd output rows sample different phases of
-    // the Catmull-Rom filter: even rows use the quarter phase and odd rows use the
-    // three-quarter phase. The four-tap source window therefore begins one row
-    // earlier for even rows. `y & 1` selects both the window and phase coefficients.
-    const int y0 = cy - ((y & 1) ? 1 : 2);
-    float rows[4];
-    // Catmull-Rom bicubic reconstruction (B=0, C=0.5). `vy` contains the two
-    // vertical quarter-phase four-tap filters; the horizontal half-phase taps
-    // below are [-1/16, 9/16, 9/16, -1/16].
-    const float vy[4] = {
-        (y & 1) ? -0.0703125f : -0.0234375f,
-        (y & 1) ?  0.8671875f :  0.2265625f,
-        (y & 1) ?  0.2265625f :  0.8671875f,
-        (y & 1) ? -0.0234375f : -0.0703125f,
+struct ChromaQuad {
+    float2 topLeft;
+    float2 topRight;
+    float2 bottomLeft;
+    float2 bottomRight;
+};
+
+template <bool BOTTOM>
+__device__ __forceinline__ auto FilterVerticalChroma(const float2 rows[5]) -> float2 {
+    constexpr int start = BOTTOM ? 1 : 0;
+    constexpr float w0 = BOTTOM ? -0.0703125f : -0.0234375f;
+    constexpr float w1 = BOTTOM ?  0.8671875f :  0.2265625f;
+    constexpr float w2 = BOTTOM ?  0.2265625f :  0.8671875f;
+    constexpr float w3 = BOTTOM ? -0.0234375f : -0.0703125f;
+
+    float2 even {
+        w0 * rows[start].x,
+        w0 * rows[start].y,
     };
+    even.x = fmaf(w2, rows[start + 2].x, even.x);
+    even.y = fmaf(w2, rows[start + 2].y, even.y);
+    float2 odd {
+        w1 * rows[start + 1].x,
+        w1 * rows[start + 1].y,
+    };
+    odd.x = fmaf(w3, rows[start + 3].x, odd.x);
+    odd.y = fmaf(w3, rows[start + 3].y, odd.y);
+    return make_float2(even.x + odd.x, even.y + odd.y);
+}
+
+template <typename TUV, int SHIFT>
+__device__ __forceinline__ auto ReconstructBufferChromaQuad(
+        const unsigned char *uv,
+        size_t uvPitchBytes,
+        int chromaWidth,
+        int chromaHeight,
+        int cx,
+        int cy,
+        float scale,
+        float offset) -> ChromaQuad {
+    // An aligned 2x2 luma block needs five chroma rows. Reuse each row's four UV samples for
+    // both horizontal phases and both output rows: 20 vector fetches serve all four pixels.
+    float2 leftRows[5];
+    float2 rightRows[5];
+
     const auto sample = [&](int sx, int sy) {
         sx = MirrorIndex(sx, chromaWidth);
         sy = MirrorIndex(sy, chromaHeight);
-        const auto *row = reinterpret_cast<const T *>(uv + static_cast<size_t>(sy) * uvPitchBytes);
-        const float code = static_cast<float>(
-            row[static_cast<size_t>(sx) * 2 + component] >> shift);
-        return fmaf(code, scale, offset);
+        const auto *row = reinterpret_cast<const TUV *>(
+            uv + static_cast<size_t>(sy) * uvPitchBytes);
+        const TUV code = row[sx];
+
+        return make_float2(
+            fmaf(static_cast<float>(code.x >> SHIFT), scale, offset),
+            fmaf(static_cast<float>(code.y >> SHIFT), scale, offset));
     };
+
 #pragma unroll
-    for (int j = 0; j < 4; ++j) {
-        if ((x & 1) == 0) {
-            rows[j] = sample(cx, y0 + j);
-        } else {
-            // Match zimg's AVX2 reduction tree: even and odd taps are accumulated
-            // independently with FMA, then added before the fp16 store.
-            float even = -0.0625f * sample(cx - 1, y0 + j);
-            even = fmaf(0.5625f, sample(cx + 1, y0 + j), even);
-            float odd = 0.5625f * sample(cx, y0 + j);
-            odd = fmaf(-0.0625f, sample(cx + 2, y0 + j), odd);
-            rows[j] = even + odd;
-        }
+    for (int j = 0; j < 5; ++j) {
+        const int sy = cy - 2 + j;
+        const float2 first = sample(cx - 1, sy);
+        const float2 second = sample(cx, sy);
+        const float2 third = sample(cx + 1, sy);
+        const float2 fourth = sample(cx + 2, sy);
+
+        leftRows[j] = second;
+
+        // Match zimg's AVX2 reduction tree: even and odd taps are accumulated
+        // independently with FMA, then added before the vertical reconstruction.
+        float2 even {
+            -0.0625f * first.x,
+            -0.0625f * first.y,
+        };
+        even.x = fmaf(0.5625f, third.x, even.x);
+        even.y = fmaf(0.5625f, third.y, even.y);
+        float2 odd {
+            0.5625f * second.x,
+            0.5625f * second.y,
+        };
+        odd.x = fmaf(-0.0625f, fourth.x, odd.x);
+        odd.y = fmaf(-0.0625f, fourth.y, odd.y);
+        rightRows[j] = make_float2(even.x + odd.x, even.y + odd.y);
     }
-    float even = vy[0] * rows[0];
-    even = fmaf(vy[2], rows[2], even);
-    float odd = vy[1] * rows[1];
-    odd = fmaf(vy[3], rows[3], odd);
-    return even + odd;
+
+    return {
+        FilterVerticalChroma<false>(leftRows),
+        FilterVerticalChroma<false>(rightRows),
+        FilterVerticalChroma<true>(leftRows),
+        FilterVerticalChroma<true>(rightRows),
+    };
 }
 
-template <typename T, int SHIFT>
+__device__ __forceinline__ auto ConvertYuvToRgb(float yy,
+                                                float2 chroma,
+                                                float rCr,
+                                                float gCb,
+                                                float gCr,
+                                                float bCb) -> float3 {
+    // Clamp final values to the [0,1] range to accommodate models that aren't trained to handle
+    // RGB values outside of that range
+    return make_float3(
+        Clamp01(fmaf(rCr, chroma.y, yy)),
+        Clamp01(fmaf(gCr, chroma.y, fmaf(gCb, chroma.x, yy))),
+        Clamp01(fmaf(bCb, chroma.x, yy)));
+}
+
+__device__ __forceinline__ auto StoreRgbPair(__half *dst,
+                                             size_t plane,
+                                             size_t i,
+                                             float3 left,
+                                             float3 right,
+                                             bool hasRight) -> void {
+    // The base allocation is aligned. All three plane addresses are half2-aligned when both
+    // the plane size and the first sample index are even.
+    if (hasRight && ((plane | i) & 1) == 0) {
+        *reinterpret_cast<__half2 *>(dst + i) = __floats2half2_rn(left.x, right.x);
+        *reinterpret_cast<__half2 *>(dst + plane + i) = __floats2half2_rn(left.y, right.y);
+        *reinterpret_cast<__half2 *>(dst + 2 * plane + i) = __floats2half2_rn(left.z, right.z);
+        return;
+    }
+
+    dst[i] = __float2half_rn(left.x);
+    dst[plane + i] = __float2half_rn(left.y);
+    dst[2 * plane + i] = __float2half_rn(left.z);
+
+    if (hasRight) {
+        dst[i + 1] = __float2half_rn(right.x);
+        dst[plane + i + 1] = __float2half_rn(right.y);
+        dst[2 * plane + i + 1] = __float2half_rn(right.z);
+    }
+}
+
+template <typename TY, typename TUV, int SHIFT>
 __global__ void Yuv420ToFp16PlanarKernel(const unsigned char *src,
                                          size_t yPitchBytes,
                                          size_t uvOffsetBytes,
@@ -104,46 +178,42 @@ __global__ void Yuv420ToFp16PlanarKernel(const unsigned char *src,
                                          int height,
                                          bool bt709,
                                          bool fullRange) {
-    const int x = blockIdx.x * blockDim.x + threadIdx.x;
-    const int y = blockIdx.y * blockDim.y + threadIdx.y;
+    // Each thread owns one aligned 2x2 luma block so its four outputs share chroma work.
+    const int x = 2 * (blockIdx.x * blockDim.x + threadIdx.x);
+    const int y = 2 * (blockIdx.y * blockDim.y + threadIdx.y);
     if (x >= width || y >= height) {
         return;
     }
 
-    const size_t i = static_cast<size_t>(y) * width + x;
-    const auto *yRow = reinterpret_cast<const T *>(src + static_cast<size_t>(y) * yPitchBytes);
     const unsigned char *uv = src + uvOffsetBytes;
-    const int depth = sizeof(T) == 1 ? 8 : 10;
+    const int depth = sizeof(TY) == 1 ? 8 : 10;
     const float codeScale = static_cast<float>(1 << (depth - 8));
     const float maximum = static_cast<float>((1 << depth) - 1);
     const float yOffset = fullRange ? 0.0f : 16.0f * codeScale;
     const float yRange = fullRange ? maximum : 219.0f * codeScale;
     // zimg stores scale/offset as float and evaluates scale*code+offset with FMA.
-    const float yy = fmaf(static_cast<float>(yRow[x] >> SHIFT), 1.0f / yRange, -yOffset / yRange);
-    float cb, cr;
-    if constexpr (sizeof(T) == 2) {
+    const float yScale = 1.0f / yRange;
+    const float yBias = -yOffset / yRange;
+    const auto sampleY = [&](int sx, int sy) {
+        const auto *row = reinterpret_cast<const TY *>(
+            src + static_cast<size_t>(sy) * yPitchBytes);
+        return fmaf(static_cast<float>(row[sx] >> SHIFT), yScale, yBias);
+    };
+
+    ChromaQuad chroma;
+    if constexpr (sizeof(TY) == 2) {
         const float scale = fullRange ? 1.0f / 1023.0f : 1.0f / 896.0f;
         const float offset = fullRange ? -512.0f / 1023.0f : -512.0f / 896.0f;
-        cb = ReconstructFloatChroma<T>(uv, uvPitchBytes, width / 2, height / 2,
-                                       x, y, 0, SHIFT,
-                                       scale, offset);
-        cr = ReconstructFloatChroma<T>(uv, uvPitchBytes, width / 2, height / 2,
-                                       x, y, 1, SHIFT,
-                                       scale, offset);
+        chroma = ReconstructBufferChromaQuad<TUV, SHIFT>(
+            uv, uvPitchBytes, width / 2, height / 2, x / 2, y / 2, scale, offset);
     } else if (fullRange) {
-        cb = ReconstructFloatChroma<T>(uv, uvPitchBytes, width / 2, height / 2,
-                                       x, y, 0, SHIFT,
-                                       1.0f / 255.0f, -128.0f / 255.0f);
-        cr = ReconstructFloatChroma<T>(uv, uvPitchBytes, width / 2, height / 2,
-                                       x, y, 1, SHIFT,
-                                       1.0f / 255.0f, -128.0f / 255.0f);
+        chroma = ReconstructBufferChromaQuad<TUV, SHIFT>(
+            uv, uvPitchBytes, width / 2, height / 2, x / 2, y / 2,
+            1.0f / 255.0f, -128.0f / 255.0f);
     } else {
-        cb = ReconstructFloatChroma<T>(uv, uvPitchBytes, width / 2, height / 2,
-                                       x, y, 0, SHIFT,
-                                       1.0f / 224.0f, -128.0f / 224.0f);
-        cr = ReconstructFloatChroma<T>(uv, uvPitchBytes, width / 2, height / 2,
-                                       x, y, 1, SHIFT,
-                                       1.0f / 224.0f, -128.0f / 224.0f);
+        chroma = ReconstructBufferChromaQuad<TUV, SHIFT>(
+            uv, uvPitchBytes, width / 2, height / 2, x / 2, y / 2,
+            1.0f / 224.0f, -128.0f / 224.0f);
     }
 
     // Coefficients are the float casts of zimg's double-precision BT.709/BT.470BG inverse
@@ -153,16 +223,27 @@ __global__ void Yuv420ToFp16PlanarKernel(const unsigned char *src,
     const float gCr = bt709 ? kBt709GreenFromCr : kBt601GreenFromCr;
     const float bCb = bt709 ? kBt709BlueFromCb : kBt601BlueFromCb;
 
-    // Clamp final values to the [0,1] range to accommodate models that aren't trained to handle
-    // RGB values outside of that range.
-    const float r = Clamp01(fmaf(rCr, cr, yy));
-    const float g = Clamp01(fmaf(gCr, cr, fmaf(gCb, cb, yy)));
-    const float b = Clamp01(fmaf(bCb, cb, yy));
-
+    const bool hasRight = x + 1 < width;
+    const bool hasBottom = y + 1 < height;
     const size_t plane = static_cast<size_t>(width) * height;
-    dst[i] = __float2half_rn(r);
-    dst[plane + i] = __float2half_rn(g);
-    dst[2 * plane + i] = __float2half_rn(b);
+    const size_t top = static_cast<size_t>(y) * width + x;
+
+    const float3 topLeft = ConvertYuvToRgb(
+        sampleY(x, y), chroma.topLeft, rCr, gCb, gCr, bCb);
+    const float3 topRight = hasRight
+        ? ConvertYuvToRgb(sampleY(x + 1, y), chroma.topRight, rCr, gCb, gCr, bCb)
+        : topLeft;
+    StoreRgbPair(dst, plane, top, topLeft, topRight, hasRight);
+
+    if (hasBottom) {
+        const float3 bottomLeft = ConvertYuvToRgb(
+            sampleY(x, y + 1), chroma.bottomLeft, rCr, gCb, gCr, bCb);
+        const float3 bottomRight = hasRight
+            ? ConvertYuvToRgb(
+                sampleY(x + 1, y + 1), chroma.bottomRight, rCr, gCb, gCr, bCb)
+            : bottomLeft;
+        StoreRgbPair(dst, plane, top + width, bottomLeft, bottomRight, hasRight);
+    }
 }
 
 // fp16 [0,1]-ish -> 16-bit full-range integer. The engine output should sit in [0,1] but clamp
@@ -203,16 +284,17 @@ auto LaunchYuv420ToFp16Planar(const void *dYuv,
                               const Yuv420Conversion &conversion,
                               cudaStream_t stream) -> cudaError_t {
     const dim3 block(32, 8);
-    const dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
+    const dim3 grid((width + 2 * block.x - 1) / (2 * block.x),
+                    (height + 2 * block.y - 1) / (2 * block.y));
 
     if (conversion.format == Yuv420Format::NV12) {
-        Yuv420ToFp16PlanarKernel<unsigned char, 0><<<grid, block, 0, stream>>>(
+        Yuv420ToFp16PlanarKernel<unsigned char, uchar2, 0><<<grid, block, 0, stream>>>(
             static_cast<const unsigned char *>(dYuv),
             yPitchBytes, uvOffsetBytes, uvPitchBytes,
             static_cast<__half *>(dPlanarFp16),
             width, height, conversion.bt709, conversion.fullRange);
     } else {
-        Yuv420ToFp16PlanarKernel<unsigned short, 6><<<grid, block, 0, stream>>>(
+        Yuv420ToFp16PlanarKernel<unsigned short, ushort2, 6><<<grid, block, 0, stream>>>(
             static_cast<const unsigned char *>(dYuv),
             yPitchBytes, uvOffsetBytes, uvPitchBytes,
             static_cast<__half *>(dPlanarFp16),
