@@ -10,6 +10,15 @@ namespace MLFilter {
 
 namespace {
 
+constexpr float chromaScale8BitFull = 1.0f / 255.0f;
+constexpr float chromaScale10BitFull = 1.0f / 1023.0f;
+constexpr float chromaScale8BitLimited = 1.0f / 224.0f;
+constexpr float chromaScale10BitLimited = 1.0f / 896.0f;
+constexpr float chromaOffset8BitFull = -128.0f / 255.0f;
+constexpr float chromaOffset10BitFull = -512.0f / 1023.0f;
+constexpr float chromaOffset8BitLimited = -128.0f / 224.0f;
+constexpr float chromaOffset10BitLimited = -512.0f / 896.0f;
+
 // Non-constant-luminance Y'CbCr -> R'G'B' matrix coefficients. Luma has coefficient 1.0
 // for every output channel; omitted chroma coefficients are zero.
 constexpr float kBt709RedFromCr = 1.5748f;
@@ -22,18 +31,31 @@ constexpr float kBt601GreenFromCb = -0.34413628620102216f;
 constexpr float kBt601GreenFromCr = -0.7141362862010221f;
 constexpr float kBt601BlueFromCb = 1.772f;
 
+constexpr int kChromaBlockWidth = 32;
+constexpr int kChromaBlockHeight = 8;
+constexpr int kChromaTileWidth = kChromaBlockWidth + 3;
+constexpr int kChromaTileHeight = kChromaBlockHeight + 4;
+
 __device__ __forceinline__ auto Clamp01(float value) -> float {
     return fminf(fmaxf(value, 0.0f), 1.0f);
 }
 
 __device__ inline auto MirrorIndex(int i, int length) -> int {
+    if (i >= 0 && i < length) {
+        return i;
+    }
+
+    if (length <= 1) {
+        return 0;
+    }
+
+    const int period = 2 * length;
+    i %= period;
     if (i < 0) {
-        return -i - 1;
+        i += period;
     }
-    if (i >= length) {
-        return 2 * length - i - 1;
-    }
-    return i;
+
+    return i < length ? i : period - i - 1;
 }
 
 struct ChromaQuad {
@@ -67,39 +89,50 @@ __device__ __forceinline__ auto FilterVerticalChroma(const float2 rows[5]) -> fl
 }
 
 template <typename TUV, int SHIFT>
-__device__ __forceinline__ auto ReconstructBufferChromaQuad(
+__device__ __forceinline__ auto StageBufferChromaTile(
         const unsigned char *uv,
         size_t uvPitchBytes,
         int chromaWidth,
         int chromaHeight,
-        int cx,
-        int cy,
         float scale,
-        float offset) -> ChromaQuad {
-    // An aligned 2x2 luma block needs five chroma rows. Reuse each row's four UV samples for
-    // both horizontal phases and both output rows: 20 vector fetches serve all four pixels.
-    float2 leftRows[5];
-    float2 rightRows[5];
+        float offset,
+        float2 tile[kChromaTileHeight][kChromaTileWidth]) -> void {
+    const int threadIndex = threadIdx.y * blockDim.x + threadIdx.x;
+    const int threadCount = blockDim.x * blockDim.y;
+    constexpr int tileSamples = kChromaTileWidth * kChromaTileHeight;
+    const int blockCx = blockIdx.x * kChromaBlockWidth;
+    const int blockCy = blockIdx.y * kChromaBlockHeight;
 
-    const auto sample = [&](int sx, int sy) {
-        sx = MirrorIndex(sx, chromaWidth);
-        sy = MirrorIndex(sy, chromaHeight);
+    for (int index = threadIndex; index < tileSamples; index += threadCount) {
+        const int tileY = index / kChromaTileWidth;
+        const int tileX = index - tileY * kChromaTileWidth;
+        const int sx = MirrorIndex(blockCx + tileX - 1, chromaWidth);
+        const int sy = MirrorIndex(blockCy + tileY - 2, chromaHeight);
         const auto *row = reinterpret_cast<const TUV *>(
             uv + static_cast<size_t>(sy) * uvPitchBytes);
         const TUV code = row[sx];
 
-        return make_float2(
+        tile[tileY][tileX] = make_float2(
             fmaf(static_cast<float>(code.x >> SHIFT), scale, offset),
             fmaf(static_cast<float>(code.y >> SHIFT), scale, offset));
-    };
+    }
+}
+
+__device__ __forceinline__ auto ReconstructSharedChromaQuad(
+        const float2 tile[kChromaTileHeight][kChromaTileWidth]) -> ChromaQuad {
+    // A thread's aligned 2x2 luma block needs four samples from each of five chroma rows.
+    // Those samples are already normalized and shared by every thread in this CUDA block.
+    float2 leftRows[5];
+    float2 rightRows[5];
 
 #pragma unroll
     for (int j = 0; j < 5; ++j) {
-        const int sy = cy - 2 + j;
-        const float2 first = sample(cx - 1, sy);
-        const float2 second = sample(cx, sy);
-        const float2 third = sample(cx + 1, sy);
-        const float2 fourth = sample(cx + 2, sy);
+        const int tileY = threadIdx.y + j;
+        const int tileX = threadIdx.x;
+        const float2 first = tile[tileY][tileX];
+        const float2 second = tile[tileY][tileX + 1];
+        const float2 third = tile[tileY][tileX + 2];
+        const float2 fourth = tile[tileY][tileX + 3];
 
         leftRows[j] = second;
 
@@ -181,11 +214,28 @@ __global__ void Yuv420ToFp16PlanarKernel(const unsigned char *src,
     // Each thread owns one aligned 2x2 luma block so its four outputs share chroma work.
     const int x = 2 * (blockIdx.x * blockDim.x + threadIdx.x);
     const int y = 2 * (blockIdx.y * blockDim.y + threadIdx.y);
+    const unsigned char *uv = src + uvOffsetBytes;
+
+    float chromaScale;
+    float chromaOffset;
+    if constexpr (sizeof(TY) == 2) {
+        chromaScale = fullRange ? chromaScale10BitFull : chromaScale10BitLimited;
+        chromaOffset = fullRange ? chromaOffset10BitFull : chromaOffset10BitLimited;
+    } else {
+        chromaScale = fullRange ? chromaScale8BitFull : chromaScale8BitLimited;
+        chromaOffset = fullRange ? chromaOffset8BitFull : chromaOffset8BitLimited;
+    }
+
+    __shared__ float2 chromaTile[kChromaTileHeight][kChromaTileWidth];
+    StageBufferChromaTile<TUV, SHIFT>(
+        uv, uvPitchBytes, width / 2, height / 2,
+        chromaScale, chromaOffset, chromaTile);
+    __syncthreads();
+
     if (x >= width || y >= height) {
         return;
     }
 
-    const unsigned char *uv = src + uvOffsetBytes;
     const int depth = sizeof(TY) == 1 ? 8 : 10;
     const float codeScale = static_cast<float>(1 << (depth - 8));
     const float maximum = static_cast<float>((1 << depth) - 1);
@@ -200,21 +250,7 @@ __global__ void Yuv420ToFp16PlanarKernel(const unsigned char *src,
         return fmaf(static_cast<float>(row[sx] >> SHIFT), yScale, yBias);
     };
 
-    ChromaQuad chroma;
-    if constexpr (sizeof(TY) == 2) {
-        const float scale = fullRange ? 1.0f / 1023.0f : 1.0f / 896.0f;
-        const float offset = fullRange ? -512.0f / 1023.0f : -512.0f / 896.0f;
-        chroma = ReconstructBufferChromaQuad<TUV, SHIFT>(
-            uv, uvPitchBytes, width / 2, height / 2, x / 2, y / 2, scale, offset);
-    } else if (fullRange) {
-        chroma = ReconstructBufferChromaQuad<TUV, SHIFT>(
-            uv, uvPitchBytes, width / 2, height / 2, x / 2, y / 2,
-            1.0f / 255.0f, -128.0f / 255.0f);
-    } else {
-        chroma = ReconstructBufferChromaQuad<TUV, SHIFT>(
-            uv, uvPitchBytes, width / 2, height / 2, x / 2, y / 2,
-            1.0f / 224.0f, -128.0f / 224.0f);
-    }
+    const ChromaQuad chroma = ReconstructSharedChromaQuad(chromaTile);
 
     // Coefficients are the float casts of zimg's double-precision BT.709/BT.470BG inverse
     // matrices. Preserve zimg's multiply, FMA, FMA evaluation order.
@@ -283,7 +319,7 @@ auto LaunchYuv420ToFp16Planar(const void *dYuv,
                               int height,
                               const Yuv420Conversion &conversion,
                               cudaStream_t stream) -> cudaError_t {
-    const dim3 block(32, 8);
+    const dim3 block(kChromaBlockWidth, kChromaBlockHeight);
     const dim3 grid((width + 2 * block.x - 1) / (2 * block.x),
                     (height + 2 * block.y - 1) / (2 * block.y));
 
