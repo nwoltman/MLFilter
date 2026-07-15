@@ -10,6 +10,7 @@ namespace MLFilter {
 
 class CMLFilter;
 
+// Releases cached CUDA registrations before the upstream allocator decommits its buffers.
 class MLFilterInputPin
     : public CTransformInputPin
     , public ID3D11DecoderConfiguration {
@@ -30,6 +31,7 @@ public:
     auto STDMETHODCALLTYPE GetAllocator(IMemAllocator **allocator) -> HRESULT override;
 
     auto D3D11State() const -> D3D11DecoderState;
+    auto Inactive() -> HRESULT override;
     auto BreakConnect() -> HRESULT;
 
 private:
@@ -40,6 +42,7 @@ private:
     ID3D11DeviceContext *_d3d11Context = nullptr;
     HANDLE _d3d11Mutex = nullptr;
     UINT _d3d11AdapterIndex = 0;
+    CMLFilter *_filter;
 };
 
 }

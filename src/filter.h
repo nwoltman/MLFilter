@@ -47,8 +47,10 @@ public:
 private:
     auto InputPin() const -> MLFilterInputPin *;
 
+    friend class MLFilterInputPin;
     friend class MLFilterOutputPin;
 
+    auto ReleaseInputRegistrations() -> void;
     auto ReleaseOutputRegistrations() -> void;
 
     // Builds (if not already cached), deserializes, and wires the conversion pipeline for the

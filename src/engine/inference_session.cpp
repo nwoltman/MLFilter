@@ -145,6 +145,7 @@ auto InferenceSession::Create(const std::filesystem::path &enginePath, std::wstr
 }
 
 InferenceSession::~InferenceSession() {
+    UnregisterInputBuffers();
     UnregisterOutputBuffers();
     _d3d11Input.reset();
 
@@ -178,7 +179,9 @@ InferenceSession::~InferenceSession() {
     delete _runtime;
 }
 
-auto InferenceSession::UploadYuv420(const void *frame, const Yuv420Conversion &conversion) -> bool {
+auto InferenceSession::UploadYuv420(const void *frame,
+                                    size_t hostBufferBytes,
+                                    const Yuv420Conversion &conversion) -> bool {
 #ifdef MLFILTER_ENABLE_STAGE_TIMINGS
     cudaEventRecord(_evStart, _stream);
 #endif
@@ -187,6 +190,14 @@ auto InferenceSession::UploadYuv420(const void *frame, const Yuv420Conversion &c
     const size_t pitchBytes = static_cast<size_t>(_inW) * sampleBytes;
     const size_t yBytes = pitchBytes * _inH;
     const size_t frameBytes = yBytes + pitchBytes * (_inH / 2);
+    if (frame == nullptr || hostBufferBytes < frameBytes) {
+        return false;
+    }
+
+    // DirectShow allocators normally recycle a small, fixed set of host buffers. Register each
+    // address once so CUDA can DMA recurring uploads instead of staging pageable memory.
+    AcquirePinnedInput(frame, hostBufferBytes, frameBytes);
+
     if (cudaMemcpyAsync(_dYuv, frame, frameBytes, cudaMemcpyHostToDevice, _stream) != cudaSuccess) {
         return false;
     }
@@ -205,6 +216,29 @@ auto InferenceSession::UploadYuv420(const void *frame, const Yuv420Conversion &c
     cudaEventRecord(_evPreprocessed, _stream);
 #endif
 
+    return true;
+}
+
+auto InferenceSession::AcquirePinnedInput(const void *hostInput,
+                                          size_t hostBufferBytes,
+                                          size_t requiredBytes) -> bool {
+    const auto cached = std::find_if(
+        _inputHostRegistrations.begin(), _inputHostRegistrations.end(),
+        [hostInput](const HostRegistration &item) { return item.address == hostInput; });
+    if (cached != _inputHostRegistrations.end()) {
+        return cached->bytes >= requiredBytes;
+    }
+
+    if (_inputHostRegistrations.size() >= kMaxCachedRegistrations) {
+        return false;
+    }
+
+    void *registrationAddress = const_cast<void *>(hostInput);
+    if (cudaHostRegister(registrationAddress, hostBufferBytes, cudaHostRegisterDefault) != cudaSuccess) {
+        return false;
+    }
+
+    _inputHostRegistrations.push_back({registrationAddress, nullptr, hostBufferBytes});
     return true;
 }
 
@@ -248,9 +282,9 @@ auto InferenceSession::AcquireMappedOutput(void *hostOutput,
     }
 
     const auto cached = std::find_if(
-        _hostRegistrations.begin(), _hostRegistrations.end(),
+        _outputHostRegistrations.begin(), _outputHostRegistrations.end(),
         [hostOutput](const HostRegistration &item) { return item.address == hostOutput; });
-    if (cached != _hostRegistrations.end()) {
+    if (cached != _outputHostRegistrations.end()) {
         return cached->bytes >= requiredBytes
             ? MappedOutput {.deviceAddress = cached->deviceAddress}
             : MappedOutput {};
@@ -266,8 +300,8 @@ auto InferenceSession::AcquireMappedOutput(void *hostOutput,
         return {};
     }
 
-    if (_hostRegistrations.size() < kMaxCachedRegistrations) {
-        _hostRegistrations.push_back({hostOutput, deviceOutput, hostBufferBytes});
+    if (_outputHostRegistrations.size() < kMaxCachedRegistrations) {
+        _outputHostRegistrations.push_back({hostOutput, deviceOutput, hostBufferBytes});
         return {.deviceAddress = deviceOutput};
     }
 
@@ -323,18 +357,26 @@ auto InferenceSession::Download(void *hostOutput, size_t dstStrideBytes, size_t 
     return completed;
 }
 
-auto InferenceSession::UnregisterOutputBuffers() -> void {
-    for (const HostRegistration &registration : _hostRegistrations) {
+auto InferenceSession::UnregisterInputBuffers() -> void {
+    for (const HostRegistration &registration : _inputHostRegistrations) {
         cudaHostUnregister(registration.address);
     }
 
-    _hostRegistrations.clear();
+    _inputHostRegistrations.clear();
+}
+
+auto InferenceSession::UnregisterOutputBuffers() -> void {
+    for (const HostRegistration &registration : _outputHostRegistrations) {
+        cudaHostUnregister(registration.address);
+    }
+
+    _outputHostRegistrations.clear();
     _outputTransientTransfers = 0;
 }
 
 auto InferenceSession::GetOutputCacheStatus() const -> OutputCacheStatus {
     return {
-        .cached = _hostRegistrations.size(),
+        .cached = _outputHostRegistrations.size(),
         .capacity = kMaxCachedRegistrations,
         .transientTransfers = _outputTransientTransfers,
     };

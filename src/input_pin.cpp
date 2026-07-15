@@ -58,7 +58,8 @@ auto CudaDxgiAdapterIndex() -> std::optional<UINT> {
 }
 
 MLFilterInputPin::MLFilterInputPin(CMLFilter *filter, HRESULT *phr)
-    : CTransformInputPin(NAME("MLFilter input pin"), filter, phr, L"XForm In") {}
+    : CTransformInputPin(NAME("MLFilter input pin"), filter, phr, L"XForm In")
+    , _filter(filter) {}
 
 MLFilterInputPin::~MLFilterInputPin() {
     ReleaseD3D11State();
@@ -158,6 +159,11 @@ auto MLFilterInputPin::D3D11State() const -> D3D11DecoderState {
     }
 
     return state;
+}
+
+auto MLFilterInputPin::Inactive() -> HRESULT {
+    _filter->ReleaseInputRegistrations();
+    return CTransformInputPin::Inactive();
 }
 
 auto MLFilterInputPin::BreakConnect() -> HRESULT {

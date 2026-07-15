@@ -45,6 +45,7 @@ public:
                  double previousFrameMs, double &overlayOverheadMs,
                  const D3D11DecoderState *d3d11State = nullptr) -> HRESULT;
 
+    auto UnregisterInputBuffers() -> void;
     auto UnregisterOutputBuffers() -> void;
 
 private:

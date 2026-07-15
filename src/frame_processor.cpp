@@ -187,7 +187,13 @@ auto FrameProcessor::Process(IMediaSample *in, IMediaSample *out, bool showDebug
             _debugOverlay.SetTransportInfo(_hostTransportLine);
             _transportMode = TransportMode::HostCopy;
         }
-        uploaded = _session->UploadYuv420(srcBuffer, _conversion);
+        const long inputBufferSize = in->GetSize();
+        if (inputBufferSize <= 0) {
+            return E_FAIL;
+        }
+
+        uploaded = _session->UploadYuv420(
+            srcBuffer, static_cast<size_t>(inputBufferSize), _conversion);
     }
 
     if (!uploaded || !_session->Infer()) {
@@ -233,6 +239,10 @@ auto FrameProcessor::Process(IMediaSample *in, IMediaSample *out, bool showDebug
 
     out->SetActualDataLength(stride * _outH);
     return S_OK;
+}
+
+auto FrameProcessor::UnregisterInputBuffers() -> void {
+    _session->UnregisterInputBuffers();
 }
 
 auto FrameProcessor::UnregisterOutputBuffers() -> void {

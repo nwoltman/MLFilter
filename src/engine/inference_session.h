@@ -67,7 +67,9 @@ public:
     // Uploads a compact, tightly packed NV12/P010 frame and performs unpacking, range/depth
     // normalization, Catmull-Rom chroma reconstruction, matrix conversion, [0,1] clamping, and
     // fp16 packing on the GPU.
-    auto UploadYuv420(const void *frame, const Yuv420Conversion &conversion) -> bool;
+    auto UploadYuv420(const void *frame,
+                      size_t hostBufferBytes,
+                      const Yuv420Conversion &conversion) -> bool;
 
     // Packs the decoder's D3D11 NV12/P010 texture slice into a CUDA-registerable buffer on the
     // GPU, then runs preprocessing directly into TensorRT's fp16 RGB input.
@@ -87,6 +89,7 @@ public:
     // followed by a pageable transfer. Blocks until the whole stream has completed.
     auto Download(void *hostOutput, size_t dstStrideBytes, size_t hostBufferBytes) -> bool;
 
+    auto UnregisterInputBuffers() -> void;
     auto UnregisterOutputBuffers() -> void;
 
     struct OutputCacheStatus {
@@ -141,6 +144,9 @@ private:
         size_t bytes = 0;
     };
 
+    auto AcquirePinnedInput(const void *hostInput,
+                            size_t hostBufferBytes,
+                            size_t requiredBytes) -> bool;
     auto AcquireMappedOutput(void *hostOutput,
                              size_t hostBufferBytes,
                              size_t requiredBytes) -> MappedOutput;
@@ -149,7 +155,8 @@ private:
                              size_t dstStrideBytes,
                              size_t rowBytes) -> bool;
 
-    std::vector<HostRegistration> _hostRegistrations;
+    std::vector<HostRegistration> _inputHostRegistrations;
+    std::vector<HostRegistration> _outputHostRegistrations;
     static constexpr size_t kMaxCachedRegistrations = 32;
     uint64_t _outputTransientTransfers = 0;
 

@@ -296,7 +296,7 @@ auto wmain(int argc, wchar_t **argv) -> int {
         const bool uploaded = args.uploadMode == UploadMode::D3D11
             ? session->UploadD3D11Yuv420(d3d11Texture.Get(), 0, d3d11Device.Get(),
                                          d3d11Context.Get(), nullptr, conversion)
-            : session->UploadYuv420(frame.data(), conversion);
+            : session->UploadYuv420(frame.data(), frame.size(), conversion);
 
         if (!uploaded || !session->Infer() ||
             !session->Download(output.data(), static_cast<size_t>(outW) * 6,

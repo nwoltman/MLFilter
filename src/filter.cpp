@@ -574,6 +574,12 @@ auto CMLFilter::BreakConnect(PIN_DIRECTION direction) -> HRESULT {
     return CTransformFilter::BreakConnect(direction);
 }
 
+auto CMLFilter::ReleaseInputRegistrations() -> void {
+    if (_processor != nullptr) {
+        _processor->UnregisterInputBuffers();
+    }
+}
+
 auto CMLFilter::ReleaseOutputRegistrations() -> void {
     if (_processor != nullptr) {
         _processor->UnregisterOutputBuffers();
