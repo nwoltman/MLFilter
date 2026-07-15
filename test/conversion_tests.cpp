@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -421,6 +422,79 @@ auto RunConversionTest(MLFilter::Yuv420Format format,
     return true;
 }
 
+auto RunFp16PlanarToRgb48Test() -> bool {
+    constexpr uint16_t samples[] {
+        0xBC00, // -1.0
+        0x8000, // -0.0
+        0x0000, //  0.0
+        0x0001, // smallest positive subnormal
+        0x3400, //  0.25
+        0x3800, //  0.5
+        0x3A00, //  0.75
+        0x3BFF, // largest value below 1.0
+        0x3C00, //  1.0
+        0x3C01, // smallest value above 1.0
+        0x4000, //  2.0
+    };
+    constexpr int width = 257;
+    constexpr int height = 1;
+    constexpr size_t pixelCount = static_cast<size_t>(width) * height;
+    constexpr size_t componentCount = pixelCount * 3;
+
+    std::vector<uint16_t> planar(componentCount);
+    for (size_t i = 0; i < pixelCount; ++i) {
+        for (size_t channel = 0; channel < 3; ++channel) {
+            planar[channel * pixelCount + i] =
+                samples[(i + 3 * channel) % std::size(samples)];
+        }
+    }
+
+    std::vector<uint16_t> expected;
+    std::wstring referenceError;
+    if (!MLFilter::ConvertFp16PlanarToRgb48Reference(
+            planar.data(), width, height, expected, referenceError)) {
+        wprintf(L"zimg FP16-to-RGB48 reference failed: %ls\n", referenceError.c_str());
+        return false;
+    }
+
+    DeviceBuffer devicePlanar;
+    DeviceBuffer devicePacked;
+    const size_t bytes = componentCount * sizeof(uint16_t);
+    if (cudaMalloc(&devicePlanar.data, bytes) != cudaSuccess ||
+        cudaMalloc(&devicePacked.data, bytes) != cudaSuccess ||
+        cudaMemcpy(devicePlanar.data, planar.data(), bytes, cudaMemcpyHostToDevice) != cudaSuccess) {
+        printf("FP16-to-RGB48 allocation/upload failed: %s\n",
+               cudaGetErrorString(cudaGetLastError()));
+        return false;
+    }
+
+    if (MLFilter::LaunchFp16PlanarToRgb48(
+            devicePlanar.data, devicePacked.data, width, height, nullptr) != cudaSuccess) {
+        printf("FP16-to-RGB48 launch failed: %s\n", cudaGetErrorString(cudaGetLastError()));
+        return false;
+    }
+
+    std::vector<uint16_t> actual(componentCount);
+    if (cudaMemcpy(actual.data(), devicePacked.data, bytes, cudaMemcpyDeviceToHost) != cudaSuccess) {
+        printf("FP16-to-RGB48 download failed: %s\n", cudaGetErrorString(cudaGetLastError()));
+        return false;
+    }
+
+    if (actual != expected) {
+        for (size_t component = 0; component < componentCount; ++component) {
+            if (actual[component] != expected[component]) {
+                printf("FP16-to-RGB48 mismatch at component %zu: expected %u, got %u\n",
+                       component, expected[component], actual[component]);
+                break;
+            }
+        }
+        return false;
+    }
+
+    printf("  FP16 planar to RGB48 packing: exact\n");
+    return true;
+}
+
 }
 
 auto main() -> int {
@@ -444,6 +518,12 @@ auto main() -> int {
     MLFilter::D3D11CudaInput d3dInput(kWidth, kHeight);
     int failures = 0;
     int total = 0;
+
+    ++total;
+    if (!RunFp16PlanarToRgb48Test()) {
+        ++failures;
+    }
+
     const auto run = [&](MLFilter::Yuv420Format format, bool bt709, Pattern pattern) {
         ++total;
         if (!RunConversionTest(format, bt709, pattern,

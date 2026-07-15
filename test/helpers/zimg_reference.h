@@ -2,8 +2,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 struct zimg_filter_graph;
 
@@ -93,5 +95,13 @@ private:
 
     PlanarRgbFp16 _result; // pointers/stride into _r/_g/_b, returned to the caller
 };
+
+// Test reference for the post-inference packer. Converts three tightly packed planar fp16 RGB
+// channels to full-range 16-bit RGB with zimg, then interleaves the result as RGB48.
+auto ConvertFp16PlanarToRgb48Reference(const uint16_t *planar,
+                                       int width,
+                                       int height,
+                                       std::vector<uint16_t> &packed,
+                                       std::wstring &error) -> bool;
 
 }

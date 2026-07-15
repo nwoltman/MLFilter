@@ -2,8 +2,10 @@
 
 #include "zimg_reference.h"
 
+#include <array>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <malloc.h>
 
 #include <windows.h>
@@ -36,6 +38,34 @@ auto PinnedAlloc(size_t bytes) -> void * {
         return nullptr;
     }
     return p;
+}
+
+struct AlignedFree {
+    auto operator()(void *p) const -> void {
+        _aligned_free(p);
+    }
+};
+
+struct GraphFree {
+    auto operator()(zimg_filter_graph *graph) const -> void {
+        zimg_filter_graph_free(graph);
+    }
+};
+
+using AlignedPtr = std::unique_ptr<void, AlignedFree>;
+using GraphPtr = std::unique_ptr<zimg_filter_graph, GraphFree>;
+
+auto LastZimgError() -> std::wstring {
+    char message[256] = {};
+    zimg_get_last_error(message, sizeof(message));
+
+    const int needed = MultiByteToWideChar(CP_UTF8, 0, message, -1, nullptr, 0);
+    std::wstring wide(needed > 0 ? static_cast<size_t>(needed - 1) : 0, L'\0');
+    if (needed > 0) {
+        MultiByteToWideChar(CP_UTF8, 0, message, -1, wide.data(), needed);
+    }
+
+    return wide;
 }
 
 struct FormatInfo {
@@ -166,14 +196,7 @@ auto YuvToRgbConverter::Create(const Params &params, std::wstring &error) -> std
 
     converter->_graph = zimg_filter_graph_build(&src, &dst, &gparams);
     if (converter->_graph == nullptr) {
-        char msg[256] = {};
-        zimg_get_last_error(msg, sizeof(msg));
-        const int needed = MultiByteToWideChar(CP_UTF8, 0, msg, -1, nullptr, 0);
-        std::wstring wide(needed > 0 ? static_cast<size_t>(needed - 1) : 0, L'\0');
-        if (needed > 0) {
-            MultiByteToWideChar(CP_UTF8, 0, msg, -1, wide.data(), needed);
-        }
-        error = L"zimg could not build the conversion graph: " + wide;
+        error = L"zimg could not build the conversion graph: " + LastZimgError();
         return nullptr;
     }
 
@@ -278,6 +301,120 @@ auto YuvToRgbConverter::Convert(const unsigned char *srcBuffer, StageTimings *ti
         timings->zimgSec = elapsed(t1, t2);
     }
     return &_result;
+}
+
+auto ConvertFp16PlanarToRgb48Reference(const uint16_t *planar,
+                                       int width,
+                                       int height,
+                                       std::vector<uint16_t> &packed,
+                                       std::wstring &error) -> bool {
+    if (planar == nullptr || width <= 0 || height <= 0) {
+        error = L"Invalid planar FP16 image.";
+        return false;
+    }
+
+    zimg_image_format srcFormat;
+    zimg_image_format dstFormat;
+    zimg_image_format_default(&srcFormat, ZIMG_API_VERSION);
+    zimg_image_format_default(&dstFormat, ZIMG_API_VERSION);
+
+    srcFormat.width = static_cast<unsigned>(width);
+    srcFormat.height = static_cast<unsigned>(height);
+    srcFormat.pixel_type = ZIMG_PIXEL_HALF;
+    srcFormat.color_family = ZIMG_COLOR_RGB;
+    srcFormat.matrix_coefficients = ZIMG_MATRIX_RGB;
+    srcFormat.transfer_characteristics = ZIMG_TRANSFER_UNSPECIFIED;
+    srcFormat.color_primaries = ZIMG_PRIMARIES_UNSPECIFIED;
+    srcFormat.depth = 16;
+    srcFormat.pixel_range = ZIMG_RANGE_FULL;
+
+    dstFormat.width = static_cast<unsigned>(width);
+    dstFormat.height = static_cast<unsigned>(height);
+    dstFormat.pixel_type = ZIMG_PIXEL_WORD;
+    dstFormat.color_family = ZIMG_COLOR_RGB;
+    dstFormat.matrix_coefficients = ZIMG_MATRIX_RGB;
+    dstFormat.transfer_characteristics = ZIMG_TRANSFER_UNSPECIFIED;
+    dstFormat.color_primaries = ZIMG_PRIMARIES_UNSPECIFIED;
+    dstFormat.depth = 16;
+    dstFormat.pixel_range = ZIMG_RANGE_FULL;
+
+    zimg_graph_builder_params params;
+    zimg_graph_builder_params_default(&params, ZIMG_API_VERSION);
+    params.dither_type = ZIMG_DITHER_NONE;
+
+    GraphPtr graph(zimg_filter_graph_build(&srcFormat, &dstFormat, &params));
+    if (!graph) {
+        error = L"zimg could not build the FP16-to-RGB48 reference graph: " + LastZimgError();
+        return false;
+    }
+
+    const size_t rowBytes = static_cast<size_t>(width) * sizeof(uint16_t);
+    const ptrdiff_t stride = static_cast<ptrdiff_t>(RoundUp(rowBytes, kAlign));
+    const size_t planeBytes = static_cast<size_t>(stride) * height;
+    std::array<AlignedPtr, 3> srcPlanes;
+    std::array<AlignedPtr, 3> dstPlanes;
+    for (size_t plane = 0; plane < 3; ++plane) {
+        srcPlanes[plane].reset(AlignedAlloc(planeBytes));
+        dstPlanes[plane].reset(AlignedAlloc(planeBytes));
+        if (!srcPlanes[plane] || !dstPlanes[plane]) {
+            error = L"Out of memory allocating zimg FP16-to-RGB48 reference buffers.";
+            return false;
+        }
+
+        for (int y = 0; y < height; ++y) {
+            auto *dstRow = static_cast<unsigned char *>(srcPlanes[plane].get()) +
+                static_cast<ptrdiff_t>(y) * stride;
+            const auto *srcRow = planar +
+                (plane * static_cast<size_t>(height) + y) * width;
+            std::memcpy(dstRow, srcRow, rowBytes);
+        }
+    }
+
+    size_t tmpSize = 0;
+    if (zimg_filter_graph_get_tmp_size(graph.get(), &tmpSize) != ZIMG_ERROR_SUCCESS) {
+        error = L"zimg failed to report its FP16-to-RGB48 scratch buffer size.";
+        return false;
+    }
+    AlignedPtr tmp(AlignedAlloc(tmpSize > 0 ? tmpSize : kAlign));
+    if (!tmp) {
+        error = L"Out of memory allocating zimg FP16-to-RGB48 scratch buffer.";
+        return false;
+    }
+
+    zimg_image_buffer_const src = {};
+    src.version = ZIMG_API_VERSION;
+    zimg_image_buffer dst = {};
+    dst.version = ZIMG_API_VERSION;
+    for (size_t plane = 0; plane < 3; ++plane) {
+        src.plane[plane].data = srcPlanes[plane].get();
+        src.plane[plane].stride = stride;
+        src.plane[plane].mask = ZIMG_BUFFER_MAX;
+        dst.plane[plane].data = dstPlanes[plane].get();
+        dst.plane[plane].stride = stride;
+        dst.plane[plane].mask = ZIMG_BUFFER_MAX;
+    }
+
+    if (zimg_filter_graph_process(
+            graph.get(), &src, &dst, tmp.get(), nullptr, nullptr, nullptr, nullptr) !=
+        ZIMG_ERROR_SUCCESS) {
+        error = L"zimg failed to process the FP16-to-RGB48 reference image: " + LastZimgError();
+        return false;
+    }
+
+    const size_t pixelCount = static_cast<size_t>(width) * height;
+    packed.resize(pixelCount * 3);
+    for (size_t plane = 0; plane < 3; ++plane) {
+        for (int y = 0; y < height; ++y) {
+            const auto *row = reinterpret_cast<const uint16_t *>(
+                static_cast<const unsigned char *>(dstPlanes[plane].get()) +
+                static_cast<ptrdiff_t>(y) * stride);
+            for (int x = 0; x < width; ++x) {
+                packed[(static_cast<size_t>(y) * width + x) * 3 + plane] = row[x];
+            }
+        }
+    }
+
+    return true;
 }
 
 }
