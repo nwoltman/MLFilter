@@ -285,27 +285,56 @@ __global__ void Yuv420ToFp16PlanarKernel(const unsigned char *src,
 // fp16 [0,1]-ish -> 16-bit full-range integer. The engine output should sit in [0,1] but clamp
 // defensively before scaling. Rounds to nearest, ties to even (IEEE-754 default, via the
 // __float2uint_rn intrinsic) so the result is bit-identical to zimg's float->uint16 quantization.
-__device__ inline auto HalfToUnorm16(__half h) -> uint16_t {
-    float f = __half2float(h);
-    f = fminf(fmaxf(f, 0.0f), 1.0f);
+__device__ __forceinline__ auto HalfToUnorm16(__half h) -> uint16_t {
+    const float f = __saturatef(__half2float(h));
     return static_cast<uint16_t>(__float2uint_rn(f * 65535.0f));
 }
 
-// One thread per output pixel. Reads the three planar fp16 channels and writes one interleaved
-// R,G,B uint16 triple. Top-down packing (row y at dst + y*width*3), matching the RGB48 'RGB0'
-// convention and the channel order LAV/avisynth_filter use.
-__global__ void Fp16PlanarToRgb48Kernel(const __half *r, const __half *g, const __half *b,
-                                        uint16_t *dst, int width, int height) {
-    const int x = blockIdx.x * blockDim.x + threadIdx.x;
-    const int y = blockIdx.y * blockDim.y + threadIdx.y;
-    if (x >= width || y >= height) {
-        return;
+constexpr unsigned kRgb48BlockSize = 256;
+constexpr unsigned kRgb48ComponentsPerPixel = 3;
+constexpr unsigned kRgb48ComponentsPerVector = sizeof(uint4) / sizeof(uint16_t);
+constexpr unsigned kRgb48TileComponents = kRgb48BlockSize * kRgb48ComponentsPerPixel;
+
+// One thread per output pixel converts the three planar channels into an interleaved shared-memory
+// tile. The block then writes that tile as contiguous uint4 vectors. Linear top-down packing matches
+// the RGB48 'RGB0' convention.
+__global__ void Fp16PlanarToRgb48Kernel(const __half *__restrict__ r,
+                                        const __half *__restrict__ g,
+                                        const __half *__restrict__ b,
+                                        uint16_t *__restrict__ dst,
+                                        size_t pixelCount) {
+    __shared__ __align__(16) uint16_t packed[kRgb48TileComponents];
+
+    const unsigned thread = threadIdx.x;
+    const size_t blockPixel = static_cast<size_t>(blockIdx.x) * kRgb48BlockSize;
+    const size_t i = blockPixel + thread;
+    if (i < pixelCount) {
+        packed[thread * kRgb48ComponentsPerPixel] = HalfToUnorm16(r[i]);
+        packed[thread * kRgb48ComponentsPerPixel + 1] = HalfToUnorm16(g[i]);
+        packed[thread * kRgb48ComponentsPerPixel + 2] = HalfToUnorm16(b[i]);
     }
-    const size_t i = static_cast<size_t>(y) * width + x;
-    uint16_t *px = dst + i * 3;
-    px[0] = HalfToUnorm16(r[i]);
-    px[1] = HalfToUnorm16(g[i]);
-    px[2] = HalfToUnorm16(b[i]);
+    __syncthreads();
+
+    const size_t remainingPixels = pixelCount - blockPixel;
+    const unsigned blockPixels = remainingPixels < kRgb48BlockSize
+        ? static_cast<unsigned>(remainingPixels)
+        : kRgb48BlockSize;
+    const unsigned componentCount = blockPixels * kRgb48ComponentsPerPixel;
+    const unsigned vectorCount = componentCount / kRgb48ComponentsPerVector;
+    const size_t blockComponent = blockPixel * kRgb48ComponentsPerPixel;
+
+    if (thread < vectorCount) {
+        auto *dstVectors = reinterpret_cast<uint4 *>(dst + blockComponent);
+        const auto *packedVectors = reinterpret_cast<const uint4 *>(packed);
+
+        dstVectors[thread] = packedVectors[thread];
+    }
+
+    const unsigned vectorComponents = vectorCount * kRgb48ComponentsPerVector;
+    const unsigned tailComponents = componentCount - vectorComponents;
+    if (thread < tailComponents) {
+        dst[blockComponent + vectorComponents + thread] = packed[vectorComponents + thread];
+    }
 }
 
 }
@@ -342,14 +371,15 @@ auto LaunchYuv420ToFp16Planar(const void *dYuv,
 
 auto LaunchFp16PlanarToRgb48(const void *dPlanarFp16, void *dPackedRgb48, int width, int height,
                              cudaStream_t stream) -> cudaError_t {
+    const size_t pixelCount = static_cast<size_t>(width) * height;
     const auto *r = static_cast<const __half *>(dPlanarFp16);
-    const __half *g = r + static_cast<size_t>(width) * height;
-    const __half *b = g + static_cast<size_t>(width) * height;
+    const __half *g = r + pixelCount;
+    const __half *b = g + pixelCount;
 
-    const dim3 block(16, 16);
-    const dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
+    const dim3 block(kRgb48BlockSize);
+    const dim3 grid(static_cast<unsigned>((pixelCount + block.x - 1) / block.x));
     Fp16PlanarToRgb48Kernel<<<grid, block, 0, stream>>>(r, g, b, static_cast<uint16_t *>(dPackedRgb48),
-                                                        width, height);
+                                                        pixelCount);
     return cudaGetLastError();
 }
 
