@@ -23,6 +23,7 @@ param(
     [int]$Warmup = 10,    # frames to discard before timing (engine/autotune warmup)
     [ValidateSet("Release", "Debug")]
     [string]$Configuration = "Release",
+    [switch]$PipelineOnly, # omit CUDA events and individual stage timing code from the build
     [switch]$SkipBuild
 )
 
@@ -45,8 +46,10 @@ if (-not $SkipBuild) {
     # Build via the solution (not the .vcxproj directly) so $(SolutionDir) resolves and the
     # zimg dependency lands in the shared output dir — building the project alone misplaces it.
     $solution = Join-Path $PSScriptRoot "MLFilter.sln"
-    Write-Host "==> Building benchmark ($Configuration|x64)" -ForegroundColor Cyan
-    & $msbuild $solution /t:benchmark /p:Configuration=$Configuration /p:Platform=x64 /m /v:minimal /nologo
+    $stageTimings = if ($PipelineOnly) { "false" } else { "true" }
+    Write-Host "==> Building benchmark ($Configuration|x64, stage timings: $stageTimings)" -ForegroundColor Cyan
+    & $msbuild $solution /t:benchmark /p:Configuration=$Configuration /p:Platform=x64 `
+        /p:MLFilterEnableStageTimings=$stageTimings /m /v:minimal /nologo
     if ($LASTEXITCODE -ne 0) { throw "Build failed (exit $LASTEXITCODE)." }
 }
 

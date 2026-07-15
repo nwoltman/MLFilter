@@ -18,6 +18,9 @@
   <PropertyGroup Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
   </PropertyGroup>
+  <PropertyGroup>
+    <MLFilterEnableStageTimings Condition="'$(MLFilterEnableStageTimings)' == ''">true</MLFilterEnableStageTimings>
+  </PropertyGroup>
   <Import Project="$(SolutionDir)config\common.props" />
   <Import Project="$(SolutionDir)config\tensorrt.props" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
@@ -27,6 +30,7 @@
   <ItemDefinitionGroup>
     <ClCompile>
       <AdditionalIncludeDirectories>$(SolutionDir)src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions Condition="'$(MLFilterEnableStageTimings)' == 'true'">MLFILTER_ENABLE_STAGE_TIMINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <!-- Console app: the benchmark prints to stdout. -->

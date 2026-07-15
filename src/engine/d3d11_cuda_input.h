@@ -34,9 +34,13 @@ public:
                 HANDLE contextMutex,
                 const Yuv420Conversion &conversion,
                 void *destination,
-                CUstream_st *stream,
+                CUstream_st *stream
+#ifdef MLFILTER_ENABLE_STAGE_TIMINGS
+                ,
                 CUevent_st *uploadedEvent,
-                CUevent_st *preprocessedEvent) -> bool;
+                CUevent_st *preprocessedEvent
+#endif
+                ) -> bool;
 
 private:
     struct Impl;

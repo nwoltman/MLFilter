@@ -89,38 +89,28 @@ auto DebugOverlay::SetTransportInfo(std::string transportLine) -> void {
 
 auto DebugOverlay::Draw(uint8_t *frame, size_t stride, int width, int height,
                         const DebugOverlayTimings &t) -> void {
-    const std::array<double, 5> current {
-        t.uploadMs, t.preprocessMs, t.inferenceMs, t.outputMs, t.pipelineMs
-    };
-
-    for (size_t i = 0; i < current.size(); ++i) {
-        _averageSums[i] += current[i];
-    }
+    _averageSum += t.pipelineMs;
 
     ++_averageCount;
-    if (_averageCount == 1 && _displayedAverages[0] == 0) {
+    if (_averageCount == 1 && _displayedAverage == 0) {
         // Provide useful values immediately while the first full batch is collected.
-        _displayedAverages = current;
+        _displayedAverage = t.pipelineMs;
     }
     if (_averageCount == 24) {
-        for (size_t i = 0; i < current.size(); ++i) {
-            _displayedAverages[i] = _averageSums[i] / 24.0;
-            _averageSums[i] = 0;
-        }
+        _displayedAverage = _averageSum / 24.0;
+        _averageSum = 0;
         _averageCount = 0;
     }
 
-    for (size_t i = 0; i < current.size(); ++i) {
-        _maximums[i] = std::max(_maximums[i], current[i]);
-    }
+    _maximum = std::max(_maximum, t.pipelineMs);
 
     ++_maximumUpdateCount;
-    if (_maximumUpdateCount == 1 && _displayedMaximums[0] == 0) {
-        _displayedMaximums = current;
+    if (_maximumUpdateCount == 1 && _displayedMaximum == 0) {
+        _displayedMaximum = t.pipelineMs;
     }
     if (_maximumUpdateCount == 120) {
-        _displayedMaximums = _maximums;
-        _maximums.fill(0);
+        _displayedMaximum = _maximum;
+        _maximum = 0;
         _maximumUpdateCount = 0;
     }
 
@@ -128,16 +118,12 @@ auto DebugOverlay::Draw(uint8_t *frame, size_t stride, int width, int height,
     const size_t longestLine = std::max<size_t>(_engineLine.size(), 76);
     const int desiredPanelWidth = 16 + static_cast<int>(longestLine) * glyphAdvance;
     const int panelWidth = std::min(width, desiredPanelWidth);
-    const int panelHeight = std::min(height, 488);
+    const int panelHeight = std::min(height, 278);
 
     for (int y = 0; y < panelHeight; ++y) {
         std::memset(frame + static_cast<size_t>(y) * stride, 0,
                     static_cast<size_t>(panelWidth) * 3 * sizeof(uint16_t));
     }
-
-    constexpr std::array<std::string_view, 5> labels {
-        "UPLOAD", "PRE-PROCESS", "INFERENCE", "RGB48 OUTPUT", "PIPELINE"
-    };
 
     char line[128] {};
     DrawText(frame, stride, width, height, 8, 8, "MLFILTER DEBUG");
@@ -153,12 +139,10 @@ auto DebugOverlay::Draw(uint8_t *frame, size_t stride, int width, int height,
                   static_cast<unsigned long long>(t.outputTransientTransfers));
     DrawText(frame, stride, width, height, 8, 188, line);
 
-    // A blank row separates stream information from the live metrics.
-    for (size_t i = 0; i < labels.size(); ++i) {
-        std::snprintf(line, sizeof(line), "%-14s %7.3F MS (MAX %.3F)",
-                      labels[i].data(), _displayedAverages[i], _displayedMaximums[i]);
-        DrawText(frame, stride, width, height, 8, 248 + static_cast<int>(i) * 30, line);
-    }
+    // A blank row separates stream information from the live metric.
+    std::snprintf(line, sizeof(line), "%-11s %7.3F MS (MAX %.3F)",
+                  "FRAME TIME", _displayedAverage, _displayedMaximum);
+    DrawText(frame, stride, width, height, 8, 248, line);
 }
 
 }

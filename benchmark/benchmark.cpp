@@ -286,7 +286,9 @@ auto wmain(int argc, wchar_t **argv) -> int {
     };
 
     double pipelineSec = 0;
+#ifdef MLFILTER_ENABLE_STAGE_TIMINGS
     double uploadSec = 0, preprocessSec = 0, inferenceSec = 0, outputSec = 0;
+#endif
     int warmed = 0, timed = 0;
     while (warmed + timed < args.warmup + args.frames) {
         const bool timing = warmed >= args.warmup;
@@ -305,6 +307,7 @@ auto wmain(int argc, wchar_t **argv) -> int {
         const auto end = Clock::now();
         if (timing) {
             pipelineSec += std::chrono::duration<double>(end - begin).count();
+#ifdef MLFILTER_ENABLE_STAGE_TIMINGS
             MLFilter::InferenceSession::GpuStageTimings gpu;
             if (session->LastGpuTimings(gpu)) {
                 uploadSec += gpu.uploadMs / 1000.0;
@@ -312,15 +315,14 @@ auto wmain(int argc, wchar_t **argv) -> int {
                 inferenceSec += gpu.inferenceMs / 1000.0;
                 outputSec += gpu.outputMs / 1000.0;
             }
+#endif
             ++timed;
         } else ++warmed;
     }
 
     const auto ms = [&](double seconds) { return seconds / timed * 1000.0; };
     const auto fps = [&](double seconds) { return seconds > 0 ? timed / seconds : 0.0; };
-    const auto pct = [&](double seconds) {
-        return pipelineSec > 0 ? seconds / pipelineSec * 100.0 : 0.0;
-    };
+
     wprintf(L"ONNX model: %ls\n", modelPath.c_str());
     wprintf(L"Input: %dx%d %ls, %ls limited\n", args.width, args.height,
             depth == 10 ? L"P010" : L"NV12", conversion.bt709 ? L"BT.709" : L"BT.601");
@@ -328,6 +330,10 @@ auto wmain(int argc, wchar_t **argv) -> int {
             args.uploadMode == UploadMode::D3D11 ? L"D3D11 texture -> CUDA buffer" : L"software frame -> CUDA buffer");
     wprintf(L"Output: %dx%d\n\n", outW, outH);
     wprintf(L"======================== Results (%d frames) ========================\n", timed);
+#ifdef MLFILTER_ENABLE_STAGE_TIMINGS
+    const auto pct = [&](double seconds) {
+        return pipelineSec > 0 ? seconds / pipelineSec * 100.0 : 0.0;
+    };
     wprintf(L"  Stage           avg/frame     share    work\n");
     wprintf(L"  Upload         %8.3f ms    %5.1f%%    %ls\n",
             ms(uploadSec), pct(uploadSec),
@@ -339,6 +345,7 @@ auto wmain(int argc, wchar_t **argv) -> int {
     wprintf(L"  RGB48 output   %8.3f ms    %5.1f%%    FP16 packing directly to mapped host memory\n",
             ms(outputSec), pct(outputSec));
     wprintf(L"  --------------------------------------------------------------------------\n");
+#endif
     wprintf(L"  Pipeline       %8.3f ms   %8.1f fps\n",
             ms(pipelineSec), fps(pipelineSec));
     wprintf(L"====================================================================\n");

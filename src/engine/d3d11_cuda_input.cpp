@@ -212,16 +212,22 @@ struct D3D11CudaInput::Impl {
     auto Upload(ID3D11Texture2D *texture, unsigned arraySlice, ID3D11Device *inputDevice,
                 ID3D11DeviceContext *context, HANDLE contextMutex,
                 const Yuv420Conversion &conversion,
-                void *destination, CUstream_st *stream, CUevent_st *uploadedEvent,
-                CUevent_st *preprocessedEvent) -> bool;
+                void *destination, CUstream_st *stream
+#ifdef MLFILTER_ENABLE_STAGE_TIMINGS
+                , CUevent_st *uploadedEvent, CUevent_st *preprocessedEvent
+#endif
+                ) -> bool;
     auto ValidateDevice(ID3D11Device *inputDevice) -> bool;
     auto EnsureState(ID3D11Device *inputDevice, const Yuv420Conversion &conversion) -> bool;
     auto CopySlice(ID3D11Texture2D *texture, unsigned arraySlice, ID3D11Device *inputDevice,
                    ID3D11DeviceContext *context, const D3D11_TEXTURE2D_DESC &desc,
                    const Yuv420Conversion &conversion) -> bool;
     auto UploadMapped(const Yuv420Conversion &conversion, void *destination,
-                      CUstream_st *stream, CUevent_st *uploadedEvent,
-                      CUevent_st *preprocessedEvent) -> bool;
+                      CUstream_st *stream
+#ifdef MLFILTER_ENABLE_STAGE_TIMINGS
+                      , CUevent_st *uploadedEvent, CUevent_st *preprocessedEvent
+#endif
+                      ) -> bool;
     auto ReleaseSourceCache() -> void;
     auto ReleaseState() -> void;
 
@@ -258,10 +264,16 @@ D3D11CudaInput::~D3D11CudaInput() = default;
 auto D3D11CudaInput::Upload(ID3D11Texture2D *texture, unsigned arraySlice,
                             ID3D11Device *device, ID3D11DeviceContext *context,
                             HANDLE contextMutex, const Yuv420Conversion &conversion, void *destination,
-                            CUstream_st *stream, CUevent_st *uploadedEvent,
-                            CUevent_st *preprocessedEvent) -> bool {
-    return _impl->Upload(texture, arraySlice, device, context, contextMutex, conversion, destination, stream,
-                         uploadedEvent, preprocessedEvent);
+                            CUstream_st *stream
+#ifdef MLFILTER_ENABLE_STAGE_TIMINGS
+                            , CUevent_st *uploadedEvent, CUevent_st *preprocessedEvent
+#endif
+                            ) -> bool {
+    return _impl->Upload(texture, arraySlice, device, context, contextMutex, conversion, destination, stream
+#ifdef MLFILTER_ENABLE_STAGE_TIMINGS
+                         , uploadedEvent, preprocessedEvent
+#endif
+    );
 }
 
 auto D3D11CudaInput::Impl::ReleaseSourceCache() -> void {
@@ -435,8 +447,12 @@ auto D3D11CudaInput::Impl::CopySlice(ID3D11Texture2D *texture, unsigned arraySli
 }
 
 auto D3D11CudaInput::Impl::UploadMapped(const Yuv420Conversion &conversion, void *destination,
-                                        CUstream_st *stream, CUevent_st *uploadedEvent,
-                                        CUevent_st *preprocessedEvent) -> bool {
+                                        CUstream_st *stream
+#ifdef MLFILTER_ENABLE_STAGE_TIMINGS
+                                        , CUevent_st *uploadedEvent,
+                                        CUevent_st *preprocessedEvent
+#endif
+                                        ) -> bool {
     cudaGraphicsResource_t resource = packedCudaResource.Get();
     if (cudaGraphicsMapResources(1, &resource, stream) != cudaSuccess) {
         disabled = true;
@@ -451,12 +467,16 @@ auto D3D11CudaInput::Impl::UploadMapped(const Yuv420Conversion &conversion, void
 
     bool ok = false;
     if (result == cudaSuccess && mappedBytes >= packedBufferBytes) {
+#ifdef MLFILTER_ENABLE_STAGE_TIMINGS
         cudaEventRecord(uploadedEvent, stream);
+#endif
         result = LaunchYuv420ToFp16Planar(
             packedData, packedRowPitch, packedYPlaneBytes, packedRowPitch,
             destination, width, height, conversion, stream);
         ok = result == cudaSuccess;
+#ifdef MLFILTER_ENABLE_STAGE_TIMINGS
         cudaEventRecord(preprocessedEvent, stream);
+#endif
     }
 
     if (cudaGraphicsUnmapResources(1, &resource, stream) != cudaSuccess) {
@@ -475,8 +495,11 @@ auto D3D11CudaInput::Impl::UploadMapped(const Yuv420Conversion &conversion, void
 auto D3D11CudaInput::Impl::Upload(ID3D11Texture2D *texture, unsigned arraySlice,
                                   ID3D11Device *inputDevice, ID3D11DeviceContext *context,
                                   HANDLE contextMutex, const Yuv420Conversion &conversion, void *destination,
-                                  CUstream_st *stream, CUevent_st *uploadedEvent,
-                                  CUevent_st *preprocessedEvent) -> bool {
+                                  CUstream_st *stream
+#ifdef MLFILTER_ENABLE_STAGE_TIMINGS
+                                  , CUevent_st *uploadedEvent, CUevent_st *preprocessedEvent
+#endif
+                                  ) -> bool {
     if (texture == nullptr || inputDevice == nullptr || context == nullptr || destination == nullptr) {
         return false;
     }
@@ -518,7 +541,11 @@ auto D3D11CudaInput::Impl::Upload(ID3D11Texture2D *texture, unsigned arraySlice,
         }
     }
 
-    return UploadMapped(conversion, destination, stream, uploadedEvent, preprocessedEvent);
+    return UploadMapped(conversion, destination, stream
+#ifdef MLFILTER_ENABLE_STAGE_TIMINGS
+                        , uploadedEvent, preprocessedEvent
+#endif
+    );
 }
 
 }

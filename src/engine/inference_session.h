@@ -96,10 +96,9 @@ public:
     };
     auto GetOutputCacheStatus() const -> OutputCacheStatus;
 
-    // GPU-timeline durations (milliseconds) of the last completed Upload/Infer/Download cycle,
-    // measured with CUDA events recorded on the stream. Valid only after Download() synchronizes
-    // the stream. The output interval combines RGB48 packing and its implicit mapped-host write;
-    // on the fallback path it combines packing and the pageable D2H copy.
+#ifdef MLFILTER_ENABLE_STAGE_TIMINGS
+    // Benchmark-only GPU-timeline durations (milliseconds) of the last completed
+    // Upload/Infer/Download cycle, measured with CUDA events recorded on the stream.
     struct GpuStageTimings {
         double uploadMs = 0;
         double preprocessMs = 0;
@@ -107,6 +106,7 @@ public:
         double outputMs = 0;
     };
     auto LastGpuTimings(GpuStageTimings &timings) const -> bool;
+#endif
 
 private:
     InferenceSession() = default;
@@ -116,12 +116,14 @@ private:
     nvinfer1::IExecutionContext *_context = nullptr;
     CUstream_st *_stream = nullptr;
 
-    // Stream markers bracketing the four GPU phases reported by LastGpuTimings().
+#ifdef MLFILTER_ENABLE_STAGE_TIMINGS
+    // Stream markers bracketing the four benchmark phases reported by LastGpuTimings().
     CUevent_st *_evStart = nullptr;
     CUevent_st *_evUploaded = nullptr;
     CUevent_st *_evPreprocessed = nullptr;
     CUevent_st *_evInferred = nullptr;
     CUevent_st *_evOutput = nullptr;
+#endif
 
     void *_dInput = nullptr;
     void *_dYuv = nullptr;

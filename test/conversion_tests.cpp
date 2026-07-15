@@ -83,15 +83,6 @@ struct HostRegistration {
     }
 };
 
-struct CudaEvent {
-    cudaEvent_t value = nullptr;
-    ~CudaEvent() {
-        if (value != nullptr) {
-            cudaEventDestroy(value);
-        }
-    }
-};
-
 auto FindCudaDxgiAdapter(IDXGIAdapter **adapter) -> bool {
     *adapter = nullptr;
 
@@ -300,9 +291,7 @@ auto RunConversionTest(MLFilter::Yuv420Format format,
                        Pattern pattern,
                        ID3D11Device *d3dDevice,
                        ID3D11DeviceContext *d3dContext,
-                       MLFilter::D3D11CudaInput &d3dInput,
-                       cudaEvent_t uploadedEvent,
-                       cudaEvent_t preprocessedEvent) -> bool {
+                       MLFilter::D3D11CudaInput &d3dInput) -> bool {
     const bool p010 = format == MLFilter::Yuv420Format::P010;
     std::vector<unsigned char> frame =
         p010 ? MakeLimitedFrame<uint16_t>(10, pattern)
@@ -395,8 +384,7 @@ auto RunConversionTest(MLFilter::Yuv420Format format,
     }
 
     if (!d3dInput.Upload(d3dTexture.Get(), 0, d3dDevice, d3dContext, nullptr,
-                         conversion, deviceOutput.data, nullptr,
-                         uploadedEvent, preprocessedEvent)) {
+                         conversion, deviceOutput.data, nullptr)) {
         printf("D3D11/CUDA integration upload failed\n");
         return false;
     }
@@ -552,14 +540,6 @@ auto main() -> int {
         return 1;
     }
 
-    CudaEvent uploadedEvent;
-    CudaEvent preprocessedEvent;
-    if (cudaEventCreate(&uploadedEvent.value) != cudaSuccess ||
-        cudaEventCreate(&preprocessedEvent.value) != cudaSuccess) {
-        printf("CUDA event creation failed: %s\n", cudaGetErrorString(cudaGetLastError()));
-        return 1;
-    }
-
     MLFilter::D3D11CudaInput d3dInput(kWidth, kHeight);
     int failures = 0;
     int total = 0;
@@ -572,8 +552,7 @@ auto main() -> int {
     const auto run = [&](MLFilter::Yuv420Format format, bool bt709, Pattern pattern) {
         ++total;
         if (!RunConversionTest(format, bt709, pattern,
-                               d3dDevice.Get(), d3dContext.Get(), d3dInput,
-                               uploadedEvent.value, preprocessedEvent.value)) {
+                               d3dDevice.Get(), d3dContext.Get(), d3dInput)) {
             ++failures;
         }
     };

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -9,7 +8,7 @@
 namespace MLFilter {
 
 struct DebugOverlayTimings {
-    double uploadMs, preprocessMs, inferenceMs, outputMs, pipelineMs;
+    double pipelineMs;
     size_t outputCacheSize, outputCacheCapacity;
     uint64_t outputTransientTransfers;
 };
@@ -24,11 +23,11 @@ public:
               const DebugOverlayTimings &timings) -> void;
 
 private:
-    std::array<double, 5> _averageSums {};
-    std::array<double, 5> _displayedAverages {};
+    double _averageSum = 0;
+    double _displayedAverage = 0;
     size_t _averageCount = 0;
-    std::array<double, 5> _maximums {};
-    std::array<double, 5> _displayedMaximums {};
+    double _maximum = 0;
+    double _displayedMaximum = 0;
     size_t _maximumUpdateCount = 0;
     std::string _engineLine;
     std::string _inputLine;

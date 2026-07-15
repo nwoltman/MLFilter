@@ -130,6 +130,7 @@ auto InferenceSession::Create(const std::filesystem::path &enginePath, std::wstr
         return nullptr;
     }
 
+#ifdef MLFILTER_ENABLE_STAGE_TIMINGS
     if (cudaEventCreate(&session->_evStart) != cudaSuccess ||
         cudaEventCreate(&session->_evUploaded) != cudaSuccess ||
         cudaEventCreate(&session->_evPreprocessed) != cudaSuccess ||
@@ -138,6 +139,7 @@ auto InferenceSession::Create(const std::filesystem::path &enginePath, std::wstr
         error = L"Failed to create CUDA timing events.";
         return nullptr;
     }
+#endif
 
     return session;
 }
@@ -146,6 +148,7 @@ InferenceSession::~InferenceSession() {
     UnregisterOutputBuffers();
     _d3d11Input.reset();
 
+#ifdef MLFILTER_ENABLE_STAGE_TIMINGS
     if (_evStart != nullptr) {
         cudaEventDestroy(_evStart);
     }
@@ -161,6 +164,7 @@ InferenceSession::~InferenceSession() {
     if (_evOutput != nullptr) {
         cudaEventDestroy(_evOutput);
     }
+#endif
     if (_stream != nullptr) {
         cudaStreamDestroy(_stream);
     }
@@ -175,7 +179,9 @@ InferenceSession::~InferenceSession() {
 }
 
 auto InferenceSession::UploadYuv420(const void *frame, const Yuv420Conversion &conversion) -> bool {
+#ifdef MLFILTER_ENABLE_STAGE_TIMINGS
     cudaEventRecord(_evStart, _stream);
+#endif
 
     const size_t sampleBytes = conversion.format == Yuv420Format::P010 ? 2 : 1;
     const size_t pitchBytes = static_cast<size_t>(_inW) * sampleBytes;
@@ -185,7 +191,9 @@ auto InferenceSession::UploadYuv420(const void *frame, const Yuv420Conversion &c
         return false;
     }
 
+#ifdef MLFILTER_ENABLE_STAGE_TIMINGS
     cudaEventRecord(_evUploaded, _stream);
+#endif
 
     if (LaunchYuv420ToFp16Planar(
             _dYuv, pitchBytes, yBytes, pitchBytes, _dInput,
@@ -193,7 +201,10 @@ auto InferenceSession::UploadYuv420(const void *frame, const Yuv420Conversion &c
         return false;
     }
 
+#ifdef MLFILTER_ENABLE_STAGE_TIMINGS
     cudaEventRecord(_evPreprocessed, _stream);
+#endif
+
     return true;
 }
 
@@ -203,20 +214,29 @@ auto InferenceSession::UploadD3D11Yuv420(ID3D11Texture2D *texture,
                                          ID3D11DeviceContext *context,
                                          HANDLE contextMutex,
                                          const Yuv420Conversion &conversion) -> bool {
+#ifdef MLFILTER_ENABLE_STAGE_TIMINGS
     cudaEventRecord(_evStart, _stream);
+#endif
+
     if (_d3d11Input == nullptr) {
         _d3d11Input = std::make_unique<D3D11CudaInput>(_inW, _inH);
     }
 
-    return _d3d11Input->Upload(texture, arraySlice, device, context, contextMutex, conversion, _dInput,
-                               _stream, _evUploaded, _evPreprocessed);
+    return _d3d11Input->Upload(texture, arraySlice, device, context, contextMutex, conversion,
+                               _dInput, _stream
+#ifdef MLFILTER_ENABLE_STAGE_TIMINGS
+                               , _evUploaded, _evPreprocessed
+#endif
+    );
 }
 
 auto InferenceSession::Infer() -> bool {
     if (!_context->enqueueV3(_stream)) {
         return false;
     }
+#ifdef MLFILTER_ENABLE_STAGE_TIMINGS
     cudaEventRecord(_evInferred, _stream);
+#endif
     return true;
 }
 
@@ -290,9 +310,10 @@ auto InferenceSession::Download(void *hostOutput, size_t dstStrideBytes, size_t 
 
     bool completed = false;
     if (outputQueued) {
-        const bool eventRecorded = cudaEventRecord(_evOutput, _stream) == cudaSuccess;
-        const bool synchronized = cudaStreamSynchronize(_stream) == cudaSuccess;
-        completed = eventRecorded && synchronized;
+#ifdef MLFILTER_ENABLE_STAGE_TIMINGS
+        cudaEventRecord(_evOutput, _stream);
+#endif
+        completed = cudaStreamSynchronize(_stream) == cudaSuccess;
     }
 
     if (mapped.transient) {
@@ -319,6 +340,7 @@ auto InferenceSession::GetOutputCacheStatus() const -> OutputCacheStatus {
     };
 }
 
+#ifdef MLFILTER_ENABLE_STAGE_TIMINGS
 auto InferenceSession::LastGpuTimings(GpuStageTimings &timings) const -> bool {
     // Download() synchronized the stream, so all markers have completed. Adjacent event pairs
     // isolate H2D, preprocessing, TensorRT, and fused RGB48 host output on the GPU timeline.
@@ -329,11 +351,14 @@ auto InferenceSession::LastGpuTimings(GpuStageTimings &timings) const -> bool {
         cudaEventElapsedTime(&output, _evInferred, _evOutput) != cudaSuccess) {
         return false;
     }
+
     timings.uploadMs = upload;
     timings.preprocessMs = preprocess;
     timings.inferenceMs = inference;
     timings.outputMs = output;
+
     return true;
 }
+#endif
 
 }

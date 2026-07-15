@@ -224,14 +224,10 @@ auto FrameProcessor::Process(IMediaSample *in, IMediaSample *out, bool showDebug
     if (showDebugOverlay && previousFrameMs >= 0) {
         const auto overlayBegin = std::chrono::steady_clock::now();
 
-        InferenceSession::GpuStageTimings gpu {};
-        if (_session->LastGpuTimings(gpu)) {
-            const auto cache = _session->GetOutputCacheStatus();
-            _debugOverlay.Draw(dstBuffer, static_cast<size_t>(stride), _outW, _outH,
-                               {gpu.uploadMs, gpu.preprocessMs, gpu.inferenceMs,
-                                gpu.outputMs, previousFrameMs,
-                                cache.cached, cache.capacity, cache.transientTransfers});
-        }
+        const auto cache = _session->GetOutputCacheStatus();
+        _debugOverlay.Draw(dstBuffer, static_cast<size_t>(stride), _outW, _outH,
+                           {previousFrameMs, cache.cached, cache.capacity,
+                            cache.transientTransfers});
 
         const auto overlayEnd = std::chrono::steady_clock::now();
         overlayOverheadMs =
