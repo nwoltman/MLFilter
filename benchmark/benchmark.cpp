@@ -286,8 +286,7 @@ auto wmain(int argc, wchar_t **argv) -> int {
     };
 
     double pipelineSec = 0;
-    double uploadSec = 0, preprocessSec = 0, inferenceSec = 0, packSec = 0;
-    double downloadSec = 0;
+    double uploadSec = 0, preprocessSec = 0, inferenceSec = 0, outputSec = 0;
     int warmed = 0, timed = 0;
     while (warmed + timed < args.warmup + args.frames) {
         const bool timing = warmed >= args.warmup;
@@ -311,8 +310,7 @@ auto wmain(int argc, wchar_t **argv) -> int {
                 uploadSec += gpu.uploadMs / 1000.0;
                 preprocessSec += gpu.preprocessMs / 1000.0;
                 inferenceSec += gpu.inferenceMs / 1000.0;
-                packSec += gpu.packMs / 1000.0;
-                downloadSec += gpu.downloadMs / 1000.0;
+                outputSec += gpu.outputMs / 1000.0;
             }
             ++timed;
         } else ++warmed;
@@ -338,13 +336,14 @@ auto wmain(int argc, wchar_t **argv) -> int {
             ms(preprocessSec), pct(preprocessSec));
     wprintf(L"  Inference      %8.3f ms    %5.1f%%    TensorRT engine inference\n",
             ms(inferenceSec), pct(inferenceSec));
-    wprintf(L"  FP16 to RGB48  %8.3f ms    %5.1f%%    Planar FP16 to packed RGB48\n",
-            ms(packSec), pct(packSec));
-    wprintf(L"  Download       %8.3f ms    %5.1f%%    D2H (get frame from GPU)\n",
-            ms(downloadSec), pct(downloadSec));
+    wprintf(L"  RGB48 output   %8.3f ms    %5.1f%%    FP16 packing directly to mapped host memory\n",
+            ms(outputSec), pct(outputSec));
     wprintf(L"  --------------------------------------------------------------------------\n");
     wprintf(L"  Pipeline       %8.3f ms   %8.1f fps\n",
             ms(pipelineSec), fps(pipelineSec));
     wprintf(L"====================================================================\n");
+
+    // The benchmark owns its output vector, so unregister it before the vector is destroyed.
+    session->UnregisterOutputBuffers();
     return 0;
 }

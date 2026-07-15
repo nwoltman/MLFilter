@@ -296,44 +296,68 @@ constexpr unsigned kRgb48ComponentsPerVector = sizeof(uint4) / sizeof(uint16_t);
 constexpr unsigned kRgb48TileComponents = kRgb48BlockSize * kRgb48ComponentsPerPixel;
 
 // One thread per output pixel converts the three planar channels into an interleaved shared-memory
-// tile. The block then writes that tile as contiguous uint4 vectors. Linear top-down packing matches
-// the RGB48 'RGB0' convention.
+// tile. Each block stays within one row, allowing the destination to use the renderer allocator's
+// pitch. The tile is written as aligned uint4 vectors with short scalar edges. Coalesced stores are
+// especially important when dst points at mapped host memory because each transaction crosses PCIe.
 __global__ void Fp16PlanarToRgb48Kernel(const __half *__restrict__ r,
                                         const __half *__restrict__ g,
                                         const __half *__restrict__ b,
-                                        uint16_t *__restrict__ dst,
-                                        size_t pixelCount) {
+                                        unsigned char *__restrict__ dst,
+                                        size_t dstStrideBytes,
+                                        int width,
+                                        int height) {
     __shared__ __align__(16) uint16_t packed[kRgb48TileComponents];
 
     const unsigned thread = threadIdx.x;
-    const size_t blockPixel = static_cast<size_t>(blockIdx.x) * kRgb48BlockSize;
-    const size_t i = blockPixel + thread;
-    if (i < pixelCount) {
+    const unsigned rowPixel = blockIdx.x * kRgb48BlockSize;
+    const int y = static_cast<int>(blockIdx.y);
+    const unsigned x = rowPixel + thread;
+    const size_t i = static_cast<size_t>(y) * width + x;
+    if (y < height && x < static_cast<unsigned>(width)) {
         packed[thread * kRgb48ComponentsPerPixel] = HalfToUnorm16(r[i]);
         packed[thread * kRgb48ComponentsPerPixel + 1] = HalfToUnorm16(g[i]);
         packed[thread * kRgb48ComponentsPerPixel + 2] = HalfToUnorm16(b[i]);
     }
     __syncthreads();
 
-    const size_t remainingPixels = pixelCount - blockPixel;
+    const unsigned remainingPixels = static_cast<unsigned>(width) - rowPixel;
     const unsigned blockPixels = remainingPixels < kRgb48BlockSize
-        ? static_cast<unsigned>(remainingPixels)
+        ? remainingPixels
         : kRgb48BlockSize;
     const unsigned componentCount = blockPixels * kRgb48ComponentsPerPixel;
-    const unsigned vectorCount = componentCount / kRgb48ComponentsPerVector;
-    const size_t blockComponent = blockPixel * kRgb48ComponentsPerPixel;
+    auto *blockDst = reinterpret_cast<uint16_t *>(
+        dst + static_cast<size_t>(y) * dstStrideBytes) +
+        static_cast<size_t>(rowPixel) * kRgb48ComponentsPerPixel;
 
-    if (thread < vectorCount) {
-        auto *dstVectors = reinterpret_cast<uint4 *>(dst + blockComponent);
-        const auto *packedVectors = reinterpret_cast<const uint4 *>(packed);
+    const uintptr_t misalignment = reinterpret_cast<uintptr_t>(blockDst) & (alignof(uint4) - 1);
+    const unsigned alignmentComponents = static_cast<unsigned>(
+        ((alignof(uint4) - misalignment) & (alignof(uint4) - 1)) / sizeof(uint16_t));
+    const unsigned prefixComponents = alignmentComponents < componentCount
+        ? alignmentComponents
+        : componentCount;
 
-        dstVectors[thread] = packedVectors[thread];
+    if (thread < prefixComponents) {
+        blockDst[thread] = packed[thread];
     }
 
-    const unsigned vectorComponents = vectorCount * kRgb48ComponentsPerVector;
+    const unsigned vectorCount =
+        (componentCount - prefixComponents) / kRgb48ComponentsPerVector;
+
+    if (thread < vectorCount) {
+        auto *dstVectors = reinterpret_cast<uint4 *>(blockDst + prefixComponents);
+        const unsigned first = prefixComponents + thread * kRgb48ComponentsPerVector;
+        const auto pair = [&](unsigned component) {
+            return static_cast<unsigned>(packed[first + component]) |
+                (static_cast<unsigned>(packed[first + component + 1]) << 16);
+        };
+
+        dstVectors[thread] = make_uint4(pair(0), pair(2), pair(4), pair(6));
+    }
+
+    const unsigned vectorComponents = prefixComponents + vectorCount * kRgb48ComponentsPerVector;
     const unsigned tailComponents = componentCount - vectorComponents;
     if (thread < tailComponents) {
-        dst[blockComponent + vectorComponents + thread] = packed[vectorComponents + thread];
+        blockDst[vectorComponents + thread] = packed[vectorComponents + thread];
     }
 }
 
@@ -369,7 +393,11 @@ auto LaunchYuv420ToFp16Planar(const void *dYuv,
     return cudaGetLastError();
 }
 
-auto LaunchFp16PlanarToRgb48(const void *dPlanarFp16, void *dPackedRgb48, int width, int height,
+auto LaunchFp16PlanarToRgb48(const void *dPlanarFp16,
+                             void *dPackedRgb48,
+                             size_t dstStrideBytes,
+                             int width,
+                             int height,
                              cudaStream_t stream) -> cudaError_t {
     const size_t pixelCount = static_cast<size_t>(width) * height;
     const auto *r = static_cast<const __half *>(dPlanarFp16);
@@ -377,9 +405,10 @@ auto LaunchFp16PlanarToRgb48(const void *dPlanarFp16, void *dPackedRgb48, int wi
     const __half *b = g + pixelCount;
 
     const dim3 block(kRgb48BlockSize);
-    const dim3 grid(static_cast<unsigned>((pixelCount + block.x - 1) / block.x));
-    Fp16PlanarToRgb48Kernel<<<grid, block, 0, stream>>>(r, g, b, static_cast<uint16_t *>(dPackedRgb48),
-                                                        pixelCount);
+    const dim3 grid((static_cast<unsigned>(width) + block.x - 1) / block.x,
+                    static_cast<unsigned>(height));
+    Fp16PlanarToRgb48Kernel<<<grid, block, 0, stream>>>(
+        r, g, b, static_cast<unsigned char *>(dPackedRgb48), dstStrideBytes, width, height);
     return cudaGetLastError();
 }
 

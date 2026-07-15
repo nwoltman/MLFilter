@@ -89,8 +89,8 @@ auto DebugOverlay::SetTransportInfo(std::string transportLine) -> void {
 
 auto DebugOverlay::Draw(uint8_t *frame, size_t stride, int width, int height,
                         const DebugOverlayTimings &t) -> void {
-    const std::array<double, 6> current {
-        t.uploadMs, t.preprocessMs, t.inferenceMs, t.packMs, t.downloadMs, t.pipelineMs
+    const std::array<double, 5> current {
+        t.uploadMs, t.preprocessMs, t.inferenceMs, t.outputMs, t.pipelineMs
     };
 
     for (size_t i = 0; i < current.size(); ++i) {
@@ -135,9 +135,8 @@ auto DebugOverlay::Draw(uint8_t *frame, size_t stride, int width, int height,
                     static_cast<size_t>(panelWidth) * 3 * sizeof(uint16_t));
     }
 
-    constexpr std::array<std::string_view, 6> labels {
-        "UPLOAD", "PRE-PROCESS", "INFERENCE", "FP16 TO RGB48",
-        "DOWNLOAD", "PIPELINE"
+    constexpr std::array<std::string_view, 5> labels {
+        "UPLOAD", "PRE-PROCESS", "INFERENCE", "RGB48 OUTPUT", "PIPELINE"
     };
 
     char line[128] {};
@@ -149,7 +148,7 @@ auto DebugOverlay::Draw(uint8_t *frame, size_t stride, int width, int height,
     DrawText(frame, stride, width, height, 8, 158, _transportLine);
 
     std::snprintf(line, sizeof(line),
-                  "DMA CACHE: %zu/%zu  TRANSIENT REGISTRATIONS %llu",
+                  "MAPPED CACHE: %zu/%zu  TRANSIENT REGISTRATIONS %llu",
                   t.outputCacheSize, t.outputCacheCapacity,
                   static_cast<unsigned long long>(t.outputTransientTransfers));
     DrawText(frame, stride, width, height, 8, 188, line);

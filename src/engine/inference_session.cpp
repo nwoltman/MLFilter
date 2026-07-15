@@ -134,8 +134,7 @@ auto InferenceSession::Create(const std::filesystem::path &enginePath, std::wstr
         cudaEventCreate(&session->_evUploaded) != cudaSuccess ||
         cudaEventCreate(&session->_evPreprocessed) != cudaSuccess ||
         cudaEventCreate(&session->_evInferred) != cudaSuccess ||
-        cudaEventCreate(&session->_evPacked) != cudaSuccess ||
-        cudaEventCreate(&session->_evDownloaded) != cudaSuccess) {
+        cudaEventCreate(&session->_evOutput) != cudaSuccess) {
         error = L"Failed to create CUDA timing events.";
         return nullptr;
     }
@@ -159,11 +158,8 @@ InferenceSession::~InferenceSession() {
     if (_evInferred != nullptr) {
         cudaEventDestroy(_evInferred);
     }
-    if (_evPacked != nullptr) {
-        cudaEventDestroy(_evPacked);
-    }
-    if (_evDownloaded != nullptr) {
-        cudaEventDestroy(_evDownloaded);
+    if (_evOutput != nullptr) {
+        cudaEventDestroy(_evOutput);
     }
     if (_stream != nullptr) {
         cudaStreamDestroy(_stream);
@@ -221,65 +217,94 @@ auto InferenceSession::Infer() -> bool {
         return false;
     }
     cudaEventRecord(_evInferred, _stream);
-    // Convert fp16 planar -> packed RGB48 on the same stream, right after inference, so it overlaps
-    // and needs no extra synchronization.
-    if (LaunchFp16PlanarToRgb48(_dOutput, _dRgb48, _outW, _outH, _stream) != cudaSuccess) {
-        return false;
-    }
-    cudaEventRecord(_evPacked, _stream);
     return true;
 }
 
+auto InferenceSession::AcquireMappedOutput(void *hostOutput,
+                                           size_t hostBufferBytes,
+                                           size_t requiredBytes) -> MappedOutput {
+    if (hostBufferBytes < requiredBytes) {
+        return {};
+    }
+
+    const auto cached = std::find_if(
+        _hostRegistrations.begin(), _hostRegistrations.end(),
+        [hostOutput](const HostRegistration &item) { return item.address == hostOutput; });
+    if (cached != _hostRegistrations.end()) {
+        return cached->bytes >= requiredBytes
+            ? MappedOutput {.deviceAddress = cached->deviceAddress}
+            : MappedOutput {};
+    }
+
+    if (cudaHostRegister(hostOutput, hostBufferBytes, cudaHostRegisterMapped) != cudaSuccess) {
+        return {};
+    }
+
+    void *deviceOutput = nullptr;
+    if (cudaHostGetDevicePointer(&deviceOutput, hostOutput, 0) != cudaSuccess) {
+        cudaHostUnregister(hostOutput);
+        return {};
+    }
+
+    if (_hostRegistrations.size() < kMaxCachedRegistrations) {
+        _hostRegistrations.push_back({hostOutput, deviceOutput, hostBufferBytes});
+        return {.deviceAddress = deviceOutput};
+    }
+
+    ++_outputTransientTransfers;
+    return {.deviceAddress = deviceOutput, .transient = true};
+}
+
+auto InferenceSession::QueueMappedOutput(void *deviceOutput, size_t dstStrideBytes) -> bool {
+    return LaunchFp16PlanarToRgb48(
+        _dOutput, deviceOutput, dstStrideBytes, _outW, _outH, _stream) == cudaSuccess;
+}
+
+auto InferenceSession::QueuePageableOutput(void *hostOutput,
+                                           size_t dstStrideBytes,
+                                           size_t rowBytes) -> bool {
+    if (LaunchFp16PlanarToRgb48(
+            _dOutput, _dRgb48, rowBytes, _outW, _outH, _stream) != cudaSuccess) {
+        return false;
+    }
+
+    return cudaMemcpy2DAsync(hostOutput, dstStrideBytes, _dRgb48, rowBytes, rowBytes, _outH,
+                             cudaMemcpyDeviceToHost, _stream) == cudaSuccess;
+}
+
 auto InferenceSession::Download(void *hostOutput, size_t dstStrideBytes, size_t hostBufferBytes) -> bool {
-    // The packed RGB48 result is tightly stored (width*3 uint16 per row); copy it straight into the
-    // output sample, expanding each row to the allocator's (possibly padded) destination pitch.
-    bool registeredOutput = false;
-    bool transientRegistration = false;
-
-    if (hostBufferBytes >= dstStrideBytes * static_cast<size_t>(_outH)) {
-        const auto cached = std::find_if(
-            _hostRegistrations.begin(), _hostRegistrations.end(),
-            [hostOutput](const HostRegistration &item) { return item.address == hostOutput; });
-        if (cached != _hostRegistrations.end()) {
-            registeredOutput = cached->registered;
-        } else {
-            const cudaError_t result =
-                cudaHostRegister(hostOutput, hostBufferBytes, cudaHostRegisterDefault);
-            registeredOutput = result == cudaSuccess;
-
-            if (registeredOutput) {
-                if (_hostRegistrations.size() < kMaxCachedRegistrations) {
-                    _hostRegistrations.push_back({hostOutput, true});
-                } else {
-                    transientRegistration = true;
-                    ++_outputTransientTransfers;
-                }
-            }
-        }
-    }
-
     const size_t rowBytes = static_cast<size_t>(_outW) * 3 * sizeof(uint16_t);
-    const bool copyQueued =
-        cudaMemcpy2DAsync(hostOutput, dstStrideBytes, _dRgb48, rowBytes, rowBytes, _outH,
-                          cudaMemcpyDeviceToHost, _stream) == cudaSuccess;
-    bool synchronized = false;
-    if (copyQueued) {
-        cudaEventRecord(_evDownloaded, _stream);
-        synchronized = cudaStreamSynchronize(_stream) == cudaSuccess;
+    if (hostOutput == nullptr ||
+        (reinterpret_cast<uintptr_t>(hostOutput) & (alignof(uint16_t) - 1)) != 0 ||
+        dstStrideBytes < rowBytes ||
+        (dstStrideBytes & (alignof(uint16_t) - 1)) != 0) {
+        return false;
     }
 
-    if (transientRegistration) {
+    const size_t requiredBytes = dstStrideBytes * static_cast<size_t>(_outH);
+    const MappedOutput mapped =
+        AcquireMappedOutput(hostOutput, hostBufferBytes, requiredBytes);
+    const bool outputQueued = mapped.deviceAddress != nullptr
+        ? QueueMappedOutput(mapped.deviceAddress, dstStrideBytes)
+        : QueuePageableOutput(hostOutput, dstStrideBytes, rowBytes);
+
+    bool completed = false;
+    if (outputQueued) {
+        const bool eventRecorded = cudaEventRecord(_evOutput, _stream) == cudaSuccess;
+        const bool synchronized = cudaStreamSynchronize(_stream) == cudaSuccess;
+        completed = eventRecorded && synchronized;
+    }
+
+    if (mapped.transient) {
         cudaHostUnregister(hostOutput);
     }
 
-    return synchronized;
+    return completed;
 }
 
 auto InferenceSession::UnregisterOutputBuffers() -> void {
     for (const HostRegistration &registration : _hostRegistrations) {
-        if (registration.registered) {
-            cudaHostUnregister(registration.address);
-        }
+        cudaHostUnregister(registration.address);
     }
 
     _hostRegistrations.clear();
@@ -296,20 +321,18 @@ auto InferenceSession::GetOutputCacheStatus() const -> OutputCacheStatus {
 
 auto InferenceSession::LastGpuTimings(GpuStageTimings &timings) const -> bool {
     // Download() synchronized the stream, so all markers have completed. Adjacent event pairs
-    // isolate H2D, preprocessing, TensorRT, RGB48 packing, and D2H on the GPU timeline.
-    float upload = 0, preprocess = 0, inference = 0, pack = 0, download = 0;
+    // isolate H2D, preprocessing, TensorRT, and fused RGB48 host output on the GPU timeline.
+    float upload = 0, preprocess = 0, inference = 0, output = 0;
     if (cudaEventElapsedTime(&upload, _evStart, _evUploaded) != cudaSuccess ||
         cudaEventElapsedTime(&preprocess, _evUploaded, _evPreprocessed) != cudaSuccess ||
         cudaEventElapsedTime(&inference, _evPreprocessed, _evInferred) != cudaSuccess ||
-        cudaEventElapsedTime(&pack, _evInferred, _evPacked) != cudaSuccess ||
-        cudaEventElapsedTime(&download, _evPacked, _evDownloaded) != cudaSuccess) {
+        cudaEventElapsedTime(&output, _evInferred, _evOutput) != cudaSuccess) {
         return false;
     }
     timings.uploadMs = upload;
     timings.preprocessMs = preprocess;
     timings.inferenceMs = inference;
-    timings.packMs = pack;
-    timings.downloadMs = download;
+    timings.outputMs = output;
     return true;
 }
 

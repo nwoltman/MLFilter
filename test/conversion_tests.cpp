@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <iterator>
@@ -71,6 +72,15 @@ auto PatternName(Pattern pattern) -> const char * {
 struct DeviceBuffer {
     void *data = nullptr;
     ~DeviceBuffer() { cudaFree(data); }
+};
+
+struct HostRegistration {
+    void *address = nullptr;
+    ~HostRegistration() {
+        if (address != nullptr) {
+            cudaHostUnregister(address);
+        }
+    }
 };
 
 struct CudaEvent {
@@ -437,7 +447,7 @@ auto RunFp16PlanarToRgb48Test() -> bool {
         0x4000, //  2.0
     };
     constexpr int width = 257;
-    constexpr int height = 1;
+    constexpr int height = 3;
     constexpr size_t pixelCount = static_cast<size_t>(width) * height;
     constexpr size_t componentCount = pixelCount * 3;
 
@@ -469,7 +479,8 @@ auto RunFp16PlanarToRgb48Test() -> bool {
     }
 
     if (MLFilter::LaunchFp16PlanarToRgb48(
-            devicePlanar.data, devicePacked.data, width, height, nullptr) != cudaSuccess) {
+            devicePlanar.data, devicePacked.data, static_cast<size_t>(width) * 6,
+            width, height, nullptr) != cudaSuccess) {
         printf("FP16-to-RGB48 launch failed: %s\n", cudaGetErrorString(cudaGetLastError()));
         return false;
     }
@@ -491,7 +502,41 @@ auto RunFp16PlanarToRgb48Test() -> bool {
         return false;
     }
 
-    printf("  FP16 planar to RGB48 packing: exact\n");
+    constexpr size_t mappedStride = static_cast<size_t>(width) * 6 + 6;
+    std::vector<uint16_t> mappedStorage(mappedStride * height / sizeof(uint16_t), 0xA55A);
+    HostRegistration registration;
+    if (cudaHostRegister(mappedStorage.data(), mappedStorage.size() * sizeof(uint16_t),
+                         cudaHostRegisterMapped) != cudaSuccess) {
+        printf("Mapped RGB48 output registration failed: %s\n",
+               cudaGetErrorString(cudaGetLastError()));
+        return false;
+    }
+    registration.address = mappedStorage.data();
+
+    void *mappedDevice = nullptr;
+    if (cudaHostGetDevicePointer(&mappedDevice, mappedStorage.data(), 0) != cudaSuccess ||
+        MLFilter::LaunchFp16PlanarToRgb48(
+            devicePlanar.data, mappedDevice, mappedStride, width, height, nullptr) != cudaSuccess ||
+        cudaDeviceSynchronize() != cudaSuccess) {
+        printf("Mapped FP16-to-RGB48 output failed: %s\n",
+               cudaGetErrorString(cudaGetLastError()));
+        return false;
+    }
+
+    std::vector<uint16_t> mappedActual(componentCount);
+    const size_t rowComponents = static_cast<size_t>(width) * 3;
+    for (int y = 0; y < height; ++y) {
+        const auto *row = reinterpret_cast<const uint16_t *>(
+            reinterpret_cast<const unsigned char *>(mappedStorage.data()) +
+            static_cast<size_t>(y) * mappedStride);
+        std::copy_n(row, rowComponents, mappedActual.data() + static_cast<size_t>(y) * rowComponents);
+    }
+    if (mappedActual != expected) {
+        printf("Mapped FP16-to-RGB48 output did not match the tight device result.\n");
+        return false;
+    }
+
+    printf("  FP16 planar to RGB48 device/mapped packing: exact\n");
     return true;
 }
 

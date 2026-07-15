@@ -78,13 +78,13 @@ public:
                            HANDLE contextMutex,
                            const Yuv420Conversion &conversion) -> bool;
 
-    // Runs the network and, on the same stream, the fp16-planar -> packed-RGB48 conversion kernel.
-    // Returns false on a CUDA/TensorRT error.
+    // Runs the network. RGB48 packing is deferred until Download(), when the renderer's mapped
+    // output address and row stride are known. Returns false on a CUDA/TensorRT error.
     auto Infer() -> bool;
 
-    // Registers each new renderer allocator buffer for direct DMA, then copies the
-    // packed, top-down RGB48 result into it at dstStrideBytes (which may exceed width*6). Blocks
-    // until the whole stream has completed. Registration failure falls back to pageable transfer.
+    // Maps each new renderer allocator buffer and packs RGB48 directly into it from the GPU.
+    // dstStrideBytes may exceed width*6. Mapping failure falls back to packing in device memory
+    // followed by a pageable transfer. Blocks until the whole stream has completed.
     auto Download(void *hostOutput, size_t dstStrideBytes, size_t hostBufferBytes) -> bool;
 
     auto UnregisterOutputBuffers() -> void;
@@ -97,15 +97,14 @@ public:
     auto GetOutputCacheStatus() const -> OutputCacheStatus;
 
     // GPU-timeline durations (milliseconds) of the last completed Upload/Infer/Download cycle,
-    // measured with CUDA events recorded on the stream. Valid only after a Download() has
-    // synchronized the stream. The five intervals are H2D upload, YUV preprocessing, TensorRT
-    // inference, RGB48 packing, and D2H download. Returns false on a CUDA error.
+    // measured with CUDA events recorded on the stream. Valid only after Download() synchronizes
+    // the stream. The output interval combines RGB48 packing and its implicit mapped-host write;
+    // on the fallback path it combines packing and the pageable D2H copy.
     struct GpuStageTimings {
         double uploadMs = 0;
         double preprocessMs = 0;
         double inferenceMs = 0;
-        double packMs = 0;
-        double downloadMs = 0;
+        double outputMs = 0;
     };
     auto LastGpuTimings(GpuStageTimings &timings) const -> bool;
 
@@ -117,23 +116,37 @@ private:
     nvinfer1::IExecutionContext *_context = nullptr;
     CUstream_st *_stream = nullptr;
 
-    // Stream markers bracketing the five GPU phases reported by LastGpuTimings().
+    // Stream markers bracketing the four GPU phases reported by LastGpuTimings().
     CUevent_st *_evStart = nullptr;
     CUevent_st *_evUploaded = nullptr;
     CUevent_st *_evPreprocessed = nullptr;
     CUevent_st *_evInferred = nullptr;
-    CUevent_st *_evPacked = nullptr;
-    CUevent_st *_evDownloaded = nullptr;
+    CUevent_st *_evOutput = nullptr;
 
     void *_dInput = nullptr;
     void *_dYuv = nullptr;
     void *_dOutput = nullptr;
     void *_dRgb48 = nullptr;
 
+    struct MappedOutput {
+        void *deviceAddress = nullptr;
+        bool transient = false;
+    };
+
     struct HostRegistration {
         void *address = nullptr;
-        bool registered = false;
+        void *deviceAddress = nullptr;
+        size_t bytes = 0;
     };
+
+    auto AcquireMappedOutput(void *hostOutput,
+                             size_t hostBufferBytes,
+                             size_t requiredBytes) -> MappedOutput;
+    auto QueueMappedOutput(void *deviceOutput, size_t dstStrideBytes) -> bool;
+    auto QueuePageableOutput(void *hostOutput,
+                             size_t dstStrideBytes,
+                             size_t rowBytes) -> bool;
+
     std::vector<HostRegistration> _hostRegistrations;
     static constexpr size_t kMaxCachedRegistrations = 32;
     uint64_t _outputTransientTransfers = 0;
