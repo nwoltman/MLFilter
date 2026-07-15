@@ -48,14 +48,24 @@ public:
     auto UnregisterOutputBuffers() -> void;
 
 private:
+    enum class TransportMode {
+        HostCopy,
+        D3D11Native,
+    };
+
     FrameProcessor() = default;
 
     std::unique_ptr<InferenceSession> _session;
     DebugOverlay _debugOverlay;
     Yuv420Conversion _conversion {};
+    std::string _hostTransportLine;
+    std::string _nativeTransportLine;
+    TransportMode _transportMode = TransportMode::HostCopy;
 
     int _outW = 0;
     int _outH = 0;
+    int _rowBytes = 0;
+    size_t _tightOutputBytes = 0;
 };
 
 }

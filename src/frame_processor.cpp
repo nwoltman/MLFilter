@@ -54,30 +54,12 @@ public:
     auto Address() -> T ** { return &_object; }
     auto Get() const -> T * { return _object; }
 
-    auto Attach(T *object) -> void {
-        if (_object != nullptr) {
-            _object->Release();
-        }
-
-        _object = object;
-    }
-
 private:
     T *_object = nullptr;
 };
 
 auto DxgiFormatForInput(Yuv420Format format) -> DXGI_FORMAT {
     return format == Yuv420Format::P010 ? DXGI_FORMAT_P010 : DXGI_FORMAT_NV12;
-}
-
-auto TextureFormatName(DXGI_FORMAT format) -> const char * {
-    if (format == DXGI_FORMAT_NV12) {
-        return "NV12";
-    }
-    if (format == DXGI_FORMAT_P010) {
-        return "P010";
-    }
-    return "UNKNOWN";
 }
 
 auto Yuv420FormatName(Yuv420Format format) -> const char * {
@@ -87,6 +69,12 @@ auto Yuv420FormatName(Yuv420Format format) -> const char * {
 auto TransportFallbackLine(Yuv420Format format) -> std::string {
     char line[64] {};
     std::snprintf(line, sizeof(line), "TRANSPORT: HOST COPY %s", Yuv420FormatName(format));
+    return line;
+}
+
+auto TransportNativeLine(Yuv420Format format) -> std::string {
+    char line[64] {};
+    std::snprintf(line, sizeof(line), "TRANSPORT: D3D11 NATIVE %s", Yuv420FormatName(format));
     return line;
 }
 
@@ -112,11 +100,17 @@ auto FrameProcessor::Create(const std::filesystem::path &enginePath,
 
     processor->_outW = processor->_session->OutputWidth();
     processor->_outH = processor->_session->OutputHeight();
+    processor->_rowBytes = Rgb48Stride(processor->_outW);
+    processor->_tightOutputBytes =
+        static_cast<size_t>(processor->_rowBytes) * processor->_outH;
+    processor->_hostTransportLine = TransportFallbackLine(format);
+    processor->_nativeTransportLine = TransportNativeLine(format);
     processor->_debugOverlay.SetStreamInfo(
         OverlayFileName(enginePath),
         processor->_session->InputWidth(), processor->_session->InputHeight(),
         format == Yuv420Format::NV12 ? "NV12" : "P010",
         bt709, fullRange, processor->_outW, processor->_outH);
+    processor->_debugOverlay.SetTransportInfo(processor->_hostTransportLine);
 
     return processor;
 }
@@ -149,36 +143,37 @@ auto FrameProcessor::Process(IMediaSample *in, IMediaSample *out, bool showDebug
             return VFW_E_TYPE_NOT_ACCEPTED;
         }
 
-        ComRef<ID3D11Device> device;
+        ComRef<ID3D11Device> discoveredDevice;
+        ID3D11Device *device = nullptr;
         if (d3d11State != nullptr && d3d11State->device != nullptr) {
-            d3d11State->device->AddRef();
-            device.Attach(d3d11State->device);
+            device = d3d11State->device;
         } else {
-            texture.Get()->GetDevice(device.Address());
+            texture.Get()->GetDevice(discoveredDevice.Address());
+            device = discoveredDevice.Get();
         }
-        if (device.Get() == nullptr) {
+        if (device == nullptr) {
             return E_FAIL;
         }
 
-        ComRef<ID3D11DeviceContext> context;
+        ComRef<ID3D11DeviceContext> discoveredContext;
+        ID3D11DeviceContext *context = nullptr;
         if (d3d11State != nullptr && d3d11State->context != nullptr) {
-            d3d11State->context->AddRef();
-            context.Attach(d3d11State->context);
+            context = d3d11State->context;
         } else {
-            device.Get()->GetImmediateContext(context.Address());
+            device->GetImmediateContext(discoveredContext.Address());
+            context = discoveredContext.Get();
         }
-        if (context.Get() == nullptr) {
+        if (context == nullptr) {
             return E_FAIL;
         }
 
-        if (_session->UploadD3D11Yuv420(texture.Get(), arraySlice, device.Get(), context.Get(),
+        if (_session->UploadD3D11Yuv420(texture.Get(), arraySlice, device, context,
                                         d3d11State != nullptr ? d3d11State->mutex : nullptr,
                                         _conversion)) {
-            char transportLine[128] {};
-            std::snprintf(transportLine, sizeof(transportLine),
-                          "TRANSPORT: D3D11 NATIVE %s",
-                          TextureFormatName(desc.Format));
-            _debugOverlay.SetTransportInfo(transportLine);
+            if (showDebugOverlay && _transportMode != TransportMode::D3D11Native) {
+                _debugOverlay.SetTransportInfo(_nativeTransportLine);
+                _transportMode = TransportMode::D3D11Native;
+            }
             uploaded = true;
         }
 
@@ -188,7 +183,10 @@ auto FrameProcessor::Process(IMediaSample *in, IMediaSample *out, bool showDebug
             return E_FAIL;
         }
 
-        _debugOverlay.SetTransportInfo(TransportFallbackLine(_conversion.format));
+        if (showDebugOverlay && _transportMode != TransportMode::HostCopy) {
+            _debugOverlay.SetTransportInfo(_hostTransportLine);
+            _transportMode = TransportMode::HostCopy;
+        }
         uploaded = _session->UploadYuv420(srcBuffer, _conversion);
     }
 
@@ -205,10 +203,9 @@ auto FrameProcessor::Process(IMediaSample *in, IMediaSample *out, bool showDebug
     // to a 4096-byte boundary) while the media type still advertises the unpadded width*6
     // stride. The renderer reads at its allocator pitch, so derive the real row stride from the
     // actual buffer (GetSize / height) and write rows at that pitch; fall back to width*6.
-    const int rowBytes = Rgb48Stride(_outW); // valid bytes per row (width * 6)
-    int stride = rowBytes;
+    int stride = _rowBytes;
     const long bufSize = out->GetSize();
-    if (_outH > 0 && bufSize / _outH >= rowBytes) {
+    if (_outH > 0 && bufSize / _outH >= _rowBytes) {
         stride = static_cast<int>(bufSize / _outH);
     }
 
@@ -216,7 +213,7 @@ auto FrameProcessor::Process(IMediaSample *in, IMediaSample *out, bool showDebug
     // output sample, expanding each row to the allocator's row pitch.
     const size_t bufferBytes = bufSize > 0
         ? static_cast<size_t>(bufSize)
-        : static_cast<size_t>(stride) * _outH;
+        : _tightOutputBytes;
     if (!_session->Download(dstBuffer, static_cast<size_t>(stride), bufferBytes)) {
         return E_FAIL;
     }
