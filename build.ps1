@@ -48,4 +48,3 @@ if ($LASTEXITCODE -ne 0) {
 $ax = Join-Path $PSScriptRoot "x64\$Configuration\MLFilter_x64.ax"
 Write-Host ""
 Write-Host "==> Build succeeded: $ax" -ForegroundColor Green
-Write-Host "    Register it for testing with: install_dev.bat $Configuration"
