@@ -89,6 +89,7 @@ Write-Step "Writing installer scripts"
 $releaseScriptsDir = Join-Path $PSScriptRoot "release-scripts"
 Copy-Item (Join-Path $releaseScriptsDir "install.bat") -Destination $OutputDir
 Copy-Item (Join-Path $releaseScriptsDir "uninstall.bat") -Destination $OutputDir
+Copy-Item (Join-Path $releaseScriptsDir "update.bat") -Destination $OutputDir
 
 $dependencyScript = Get-Content (Join-Path $releaseScriptsDir "install_dependency.ps1") -Raw
 $dependencyScript = $dependencyScript.Replace("__RELEASE_TAG__", $ReleaseTag)
@@ -100,6 +101,11 @@ $assetMap = ($ConsumerArchitectures | ForEach-Object {
 $dependencyScript = $dependencyScript.Replace("    # __ASSET_MAP__", $assetMap)
 
 Set-Content (Join-Path $OutputDir "install_dependency.ps1") $dependencyScript -Encoding Ascii
+
+$updateScript = Get-Content (Join-Path $releaseScriptsDir "update.ps1") -Raw
+$updateScript = $updateScript.Replace("__RELEASE_TAG__", $ReleaseTag)
+$updateScript = $updateScript.Replace("__REPOSITORY__", $Repository)
+Set-Content (Join-Path $OutputDir "update.ps1") $updateScript -Encoding Ascii
 
 $totalBytes = (Get-ChildItem $OutputDir -Recurse -File | Measure-Object Length -Sum).Sum
 $binCount = (Get-ChildItem $binDir -File).Count
