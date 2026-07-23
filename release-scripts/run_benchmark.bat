@@ -17,7 +17,7 @@ call :run 1280 720 nv12 || goto :failed
 call :run 1280 720 p010 || goto :failed
 
 echo.
-echo All benchmarks completed successfully.
+echo Benchmarks completed successfully.
 pause
 exit /b 0
 

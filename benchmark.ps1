@@ -19,8 +19,8 @@ param(
     # settings (HKCU\Software\MLFilter\HDModelPath), same as the filter does during playback.
     [string]$Model = "",
 
-    [int]$Frames = 300,   # frames to time after warmup
-    [int]$Warmup = 10,    # frames to discard before timing (engine/autotune warmup)
+    [int]$Frames = 400,   # frames to time after warmup
+    [int]$Warmup = 24,    # frames to discard before timing (engine/autotune warmup)
     [ValidateSet("Release", "Debug")]
     [string]$Configuration = "Release",
     [switch]$PipelineOnly, # omit CUDA events and individual stage timing code from the build

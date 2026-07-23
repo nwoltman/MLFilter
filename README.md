@@ -11,12 +11,12 @@ The filter is mainly intended to be used to upscale video with models like the
 ## How To Use
 
 - Download the latest [release](https://github.com/nwoltman/MLFilter/releases) and unzip the contents to your desired location
-- Run the `Install.bat` script as an administrator (right-click it to find this option)
+- Run the `install.bat` script as an administrator (right-click it to find this option)
   - Do not move the folder after installing the filter. If you want to move it, uninstall the filter
-    first, then move the folder, then re-install it.
+    with `uninstall.bat` first, then move the folder, then re-install it.
 - Open your video player software and add `MLFilter` as an external filter
 - Set the filter to `Prefer` (or use `Merit` if you have other, similar filters and need them to run in a specific order)
-- Double-click the filter to open the filter configuration. Select HD and/or SD ONNX models.
+- Double-click the filter to open the filter configuration. Select an HD and/or an SD ONNX model.
   The SD model is used when either source dimension is below 720p (1280x720); otherwise
   the HD model is used. With neither model configured, the filter removes itself from the graph.
 - Press `Ctrl+Alt+J` to show the MLFilter Debug overlay when playing a video
@@ -24,7 +24,8 @@ The filter is mainly intended to be used to upscale video with models like the
 ### Running the benchmark
 
 After installing MLFilter and configuring an HD model, run `run_benchmark.bat` from the release
-folder. It benchmarks 1920x1080 and 1280x720 resolutions.
+folder. It benchmarks 1920x1080 and 1280x720 resolutions. Lower resolutions will always perform
+better, so if the timings for those HD resolutions are good, SD resolutions will be even better.
 
 ## System requirements
 

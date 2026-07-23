@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 
+#include <windows.h>
+
 #include <cuda_d3d11_interop.h>
 #include <d3d11.h>
 #include <dxgi.h>
@@ -57,6 +59,44 @@ enum class UploadMode {
     D3D11,
 };
 
+auto PipelineColor(double milliseconds) -> WORD {
+    if (milliseconds > 36.0) {
+        return FOREGROUND_RED | FOREGROUND_INTENSITY;
+    }
+    if (milliseconds > 34.0) {
+        return FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY;
+    }
+    return FOREGROUND_GREEN | FOREGROUND_INTENSITY;
+}
+
+void PrintPipelineResult(double milliseconds, double fps) {
+    wprintf(L"  Pipeline       ");
+
+    const HANDLE console = GetStdHandle(STD_OUTPUT_HANDLE);
+    CONSOLE_SCREEN_BUFFER_INFO consoleInfo {};
+    const bool hasConsole = console != nullptr && console != INVALID_HANDLE_VALUE &&
+                            GetConsoleScreenBufferInfo(console, &consoleInfo);
+    const WORD foregroundMask = FOREGROUND_RED | FOREGROUND_GREEN |
+                                FOREGROUND_BLUE | FOREGROUND_INTENSITY;
+    const WORD color = (consoleInfo.wAttributes & ~foregroundMask) |
+                       PipelineColor(milliseconds);
+
+    if (hasConsole) {
+        fflush(stdout);
+    }
+
+    const bool colorChanged = hasConsole && SetConsoleTextAttribute(console, color);
+
+    wprintf(L"%8.3f ms  %8.1f fps", milliseconds, fps);
+
+    if (colorChanged) {
+        fflush(stdout);
+        SetConsoleTextAttribute(console, consoleInfo.wAttributes);
+    }
+
+    wprintf(L"\n");
+}
+
 auto ScaleCoordinate(size_t coordinate, size_t extent, int minimum, int maximum) -> uint16_t {
     if (extent <= 1) return static_cast<uint16_t>((minimum + maximum) / 2);
     return static_cast<uint16_t>(minimum +
@@ -94,8 +134,8 @@ struct Args {
     int width = 1920;
     int height = 1080;
     MLFilter::Yuv420Format format = MLFilter::Yuv420Format::NV12;
-    int frames = 300;
-    int warmup = 10;
+    int frames = 400;
+    int warmup = 24;
     UploadMode uploadMode = UploadMode::Software;
 };
 
@@ -285,6 +325,14 @@ auto wmain(int argc, wchar_t **argv) -> int {
         .format = args.format, .bt709 = args.height >= 720, .fullRange = false
     };
 
+    wprintf(L"ONNX model: %ls\n", modelPath.c_str());
+    wprintf(L"Input: %dx%d %ls, %ls limited\n", args.width, args.height,
+            depth == 10 ? L"P010" : L"NV12", conversion.bt709 ? L"BT.709" : L"BT.601");
+    wprintf(L"Upload input: %ls\n",
+            args.uploadMode == UploadMode::D3D11 ? L"D3D11 texture -> CUDA buffer" : L"software frame -> CUDA buffer");
+    wprintf(L"Output: %dx%d\n\n", outW, outH);
+    fflush(stdout);
+
     double pipelineSec = 0;
 #ifdef MLFILTER_ENABLE_STAGE_TIMINGS
     double uploadSec = 0, preprocessSec = 0, inferenceSec = 0, outputSec = 0;
@@ -323,12 +371,6 @@ auto wmain(int argc, wchar_t **argv) -> int {
     const auto ms = [&](double seconds) { return seconds / timed * 1000.0; };
     const auto fps = [&](double seconds) { return seconds > 0 ? timed / seconds : 0.0; };
 
-    wprintf(L"ONNX model: %ls\n", modelPath.c_str());
-    wprintf(L"Input: %dx%d %ls, %ls limited\n", args.width, args.height,
-            depth == 10 ? L"P010" : L"NV12", conversion.bt709 ? L"BT.709" : L"BT.601");
-    wprintf(L"Upload input: %ls\n",
-            args.uploadMode == UploadMode::D3D11 ? L"D3D11 texture -> CUDA buffer" : L"software frame -> CUDA buffer");
-    wprintf(L"Output: %dx%d\n\n", outW, outH);
     wprintf(L"======================== Results (%d frames) ========================\n", timed);
 #ifdef MLFILTER_ENABLE_STAGE_TIMINGS
     const auto pct = [&](double seconds) {
@@ -346,8 +388,7 @@ auto wmain(int argc, wchar_t **argv) -> int {
             ms(outputSec), pct(outputSec));
     wprintf(L"  --------------------------------------------------------------------------\n");
 #endif
-    wprintf(L"  Pipeline       %8.3f ms   %8.1f fps\n",
-            ms(pipelineSec), fps(pipelineSec));
+    PrintPipelineResult(ms(pipelineSec), fps(pipelineSec));
     wprintf(L"====================================================================\n");
 
     // The benchmark owns its output vector, so unregister it before the vector is destroyed.
