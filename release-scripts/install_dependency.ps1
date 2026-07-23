@@ -39,7 +39,10 @@ try {
         Write-Host "Downloading $assetName for $architecture..."
         $temporary = "$destination.download"
         try {
-            Invoke-WebRequest -UseBasicParsing -Uri $uri -OutFile $temporary
+            & curl.exe --fail --location --output $temporary $uri
+            if ($LASTEXITCODE -ne 0) {
+                throw "Failed to download $assetName (curl exit code $LASTEXITCODE)."
+            }
             Move-Item -Force $temporary $destination
         } finally {
             Remove-Item $temporary -Force -ErrorAction SilentlyContinue
