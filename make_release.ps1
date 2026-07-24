@@ -55,6 +55,9 @@ if (Test-Path $OutputDir) { Remove-Item $OutputDir -Recurse -Force }
 $binDir = Join-Path $OutputDir "bin"
 New-Item -ItemType Directory -Path $binDir -Force | Out-Null
 
+Write-Step "Copying LICENSE.txt"
+Copy-Item (Join-Path $PSScriptRoot "LICENSE.txt") -Destination $OutputDir
+
 Write-Step "Copying MLFilter_x64.ax"
 Copy-Item $axPath -Destination $binDir
 
