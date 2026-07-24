@@ -94,7 +94,6 @@ Copy-Item (Join-Path $releaseScriptsDir "update.bat") -Destination $OutputDir
 $dependencyScript = Get-Content (Join-Path $releaseScriptsDir "bin\install_dependency.ps1") -Raw
 $dependencyScript = $dependencyScript.Replace("__RELEASE_TAG__", $ReleaseTag)
 $dependencyScript = $dependencyScript.Replace("__REPOSITORY__", $Repository)
-$dependencyScript = $dependencyScript.Replace("__ARCHITECTURES__", ($ConsumerArchitectures -join '","'))
 $assetMap = ($ConsumerArchitectures | ForEach-Object {
     '    "{0}" = "{1}"' -f $_, $architectureDlls[$_].Name
 }) -join [Environment]::NewLine
