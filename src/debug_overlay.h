@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace MLFilter {
 
@@ -29,7 +30,7 @@ private:
     double _maximum = 0;
     double _displayedMaximum = 0;
     size_t _maximumUpdateCount = 0;
-    std::string _engineLine;
+    std::vector<std::string> _engineLines;
     std::string _inputLine;
     std::string _outputLine;
     std::string _transportLine;

@@ -11,6 +11,10 @@
 namespace MLFilter {
 namespace {
 
+constexpr int TEXT_SCALE = 3;
+constexpr int GLYPH_ADVANCE = 6 * TEXT_SCALE;
+constexpr int TEXT_LEFT = 8;
+
 struct Glyph { char c; std::array<uint8_t, 7> rows; };
 constexpr Glyph GLYPHS[] = {
     {' ',{0,0,0,0,0,0,0}}, {'(',{2,4,8,8,8,4,2}}, {')',{8,4,2,2,2,4,8}},
@@ -53,18 +57,58 @@ auto PutPixel(uint8_t *frame, size_t stride, int x, int y) -> void {
 
 auto DrawText(uint8_t *frame, size_t stride, int width, int height,
               int x, int y, std::string_view text) -> void {
-    constexpr int scale = 3;
     for (char c : text) {
         const Glyph *glyph = FindGlyph(c);
         for (int row = 0; row < 7; ++row) for (int col = 0; col < 5; ++col) {
             if (!(glyph->rows[row] & (1U << (4 - col)))) continue;
-            for (int sy = 0; sy < scale; ++sy) for (int sx = 0; sx < scale; ++sx) {
-                const int px = x + col * scale + sx, py = y + row * scale + sy;
+            for (int sy = 0; sy < TEXT_SCALE; ++sy) for (int sx = 0; sx < TEXT_SCALE; ++sx) {
+                const int px = x + col * TEXT_SCALE + sx;
+                const int py = y + row * TEXT_SCALE + sy;
                 if (px < width && py < height) PutPixel(frame, stride, px, py);
             }
         }
-        x += 6 * scale;
+        x += GLYPH_ADVANCE;
     }
+}
+
+auto WrapLabeledText(std::string_view label, std::string text, int width)
+    -> std::vector<std::string> {
+    const int availableWidth = std::max(1, width - TEXT_LEFT);
+    const size_t charactersPerLine =
+        static_cast<size_t>(std::max(1, availableWidth / GLYPH_ADVANCE));
+    std::vector<std::string> lines;
+
+    if (charactersPerLine <= label.size()) {
+        text.insert(0, label);
+        for (size_t offset = 0; offset < text.size(); offset += charactersPerLine) {
+            lines.emplace_back(text.substr(offset, charactersPerLine));
+        }
+
+        return lines;
+    }
+
+    const size_t textPerLine = charactersPerLine - label.size();
+    const std::string indentation(label.size(), ' ');
+    size_t offset = 0;
+
+    do {
+        const std::string_view linePrefix = lines.empty() ? label : indentation;
+        lines.emplace_back(linePrefix);
+        lines.back().append(text.substr(offset, textPerLine));
+        offset += textPerLine;
+    } while (offset < text.size());
+
+    return lines;
+}
+
+auto WrapEngineName(std::string engineFileName, int width) -> std::vector<std::string> {
+    constexpr std::string_view label = "ENGINE: ";
+    auto lines = WrapLabeledText(label, std::move(engineFileName), width);
+    if (lines.empty()) {
+        lines.emplace_back(label);
+    }
+
+    return lines;
 }
 
 }
@@ -72,7 +116,7 @@ auto DrawText(uint8_t *frame, size_t stride, int width, int height,
 auto DebugOverlay::SetStreamInfo(std::string engineFileName, int inputWidth, int inputHeight,
                                  const char *inputFormat, bool bt709, bool fullRange,
                                  int outputWidth, int outputHeight) -> void {
-    _engineLine = "ENGINE: " + std::move(engineFileName);
+    _engineLines = WrapEngineName(std::move(engineFileName), outputWidth);
     char line[128] {};
     std::snprintf(line, sizeof(line), "INPUT: %dx%d %s, BT.%s %s",
                   inputWidth, inputHeight, inputFormat, bt709 ? "709" : "601",
@@ -114,11 +158,16 @@ auto DebugOverlay::Draw(uint8_t *frame, size_t stride, int width, int height,
         _maximumUpdateCount = 0;
     }
 
-    constexpr int glyphAdvance = 6 * 3;
-    const size_t longestLine = std::max<size_t>(_engineLine.size(), 76);
-    const int desiredPanelWidth = 16 + static_cast<int>(longestLine) * glyphAdvance;
+    size_t longestLine = 76;
+    for (const auto &engineLine : _engineLines) {
+        longestLine = std::max(longestLine, engineLine.size());
+    }
+
+    const int extraEngineRows =
+        std::max(0, static_cast<int>(_engineLines.size()) - 1);
+    const int desiredPanelWidth = 16 + static_cast<int>(longestLine) * GLYPH_ADVANCE;
     const int panelWidth = std::min(width, desiredPanelWidth);
-    const int panelHeight = std::min(height, 278);
+    const int panelHeight = std::min(height, 278 + extraEngineRows * 30);
 
     for (int y = 0; y < panelHeight; ++y) {
         std::memset(frame + static_cast<size_t>(y) * stride, 0,
@@ -126,23 +175,28 @@ auto DebugOverlay::Draw(uint8_t *frame, size_t stride, int width, int height,
     }
 
     char line[128] {};
-    DrawText(frame, stride, width, height, 8, 8, "MLFILTER DEBUG");
+    DrawText(frame, stride, width, height, TEXT_LEFT, 8, "MLFILTER DEBUG");
     // One blank text row separates the heading from the stream information.
-    DrawText(frame, stride, width, height, 8, 68, _engineLine);
-    DrawText(frame, stride, width, height, 8, 98, _inputLine);
-    DrawText(frame, stride, width, height, 8, 128, _outputLine);
-    DrawText(frame, stride, width, height, 8, 158, _transportLine);
+    for (size_t index = 0; index < _engineLines.size(); ++index) {
+        DrawText(frame, stride, width, height, TEXT_LEFT,
+                 68 + static_cast<int>(index) * 30, _engineLines[index]);
+    }
+
+    const int streamOffset = extraEngineRows * 30;
+    DrawText(frame, stride, width, height, TEXT_LEFT, 98 + streamOffset, _inputLine);
+    DrawText(frame, stride, width, height, TEXT_LEFT, 128 + streamOffset, _outputLine);
+    DrawText(frame, stride, width, height, TEXT_LEFT, 158 + streamOffset, _transportLine);
 
     std::snprintf(line, sizeof(line),
                   "MAPPED CACHE: %zu/%zu  TRANSIENT REGISTRATIONS %llu",
                   t.outputCacheSize, t.outputCacheCapacity,
                   static_cast<unsigned long long>(t.outputTransientTransfers));
-    DrawText(frame, stride, width, height, 8, 188, line);
+    DrawText(frame, stride, width, height, TEXT_LEFT, 188 + streamOffset, line);
 
     // A blank row separates stream information from the live metric.
     std::snprintf(line, sizeof(line), "%-11s %7.3F MS (MAX %.3F)",
                   "FRAME TIME", _displayedAverage, _displayedMaximum);
-    DrawText(frame, stride, width, height, 8, 248, line);
+    DrawText(frame, stride, width, height, TEXT_LEFT, 248 + streamOffset, line);
 }
 
 }
