@@ -10,6 +10,7 @@ param(
 $ErrorActionPreference = "Stop"
 $releaseTag = "__RELEASE_TAG__"
 $repository = "__REPOSITORY__"
+$installRoot = Split-Path $PSScriptRoot -Parent
 
 function Exit-Updater([int]$ExitCode) {
     if ($WaitForInput) {
@@ -174,14 +175,14 @@ try {
         Assert-SafeArchive $archivePath
         Expand-Archive -LiteralPath $archivePath -DestinationPath $extractedPath
 
-        foreach ($requiredPath in @("MLFilter_x64.ax", "install_dependency.ps1", "bin")) {
+        foreach ($requiredPath in @("bin\MLFilter_x64.ax", "bin\install_dependency.ps1", "bin\update.ps1")) {
             if (-not (Test-Path (Join-Path $extractedPath $requiredPath))) {
                 throw "The release archive is missing '$requiredPath'"
             }
         }
 
         Write-Host "Downloading the GPU-specific dependency..."
-        & (Join-Path $extractedPath "install_dependency.ps1")
+        & (Join-Path $extractedPath "bin\install_dependency.ps1")
         if ($LASTEXITCODE -ne 0) {
             throw "install_dependency.ps1 failed with exit code $LASTEXITCODE."
         }
@@ -191,17 +192,17 @@ try {
                 Select-Object -ExpandProperty Name
         )
         $obsoleteBuilderFiles = @(
-            Get-ChildItem (Join-Path $PSScriptRoot "bin") "nvinfer_builder_resource_sm*_*.dll" -ErrorAction SilentlyContinue |
+            Get-ChildItem (Join-Path $installRoot "bin") "nvinfer_builder_resource_sm*_*.dll" -ErrorAction SilentlyContinue |
                 Where-Object { $_.Name -notin $stagedBuilderNames }
         )
 
-        Assert-FilesReplaceable $extractedPath $PSScriptRoot
+        Assert-FilesReplaceable $extractedPath $installRoot
         foreach ($obsoleteBuilderFile in $obsoleteBuilderFiles) {
             Assert-FileReplaceable $obsoleteBuilderFile.FullName (Join-Path "bin" $obsoleteBuilderFile.Name)
         }
 
         Write-Host "Installing MLFilter $latestTag..."
-        Copy-Item (Join-Path $extractedPath "*") -Destination $PSScriptRoot -Recurse -Force
+        Copy-Item (Join-Path $extractedPath "*") -Destination $installRoot -Recurse -Force
         $obsoleteBuilderFiles | Remove-Item -Force
     } finally {
         Remove-Item $temporaryRoot -Recurse -Force -ErrorAction SilentlyContinue

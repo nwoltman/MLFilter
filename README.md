@@ -151,18 +151,17 @@ before registering the filter. Supported architectures are `sm75` (Turing, RTX 2
 
 ```
 release\
-  MLFilter_x64.ax          the filter
   install.bat              registers the filter (run as administrator)
-  install_dependency.ps1   downloads the correct GPU architecture DLL
   run_benchmark.bat        runs the standard benchmark matrix
   uninstall.bat            unregisters the filter
   update.bat               launches the updater
-  update.ps1               checks for and installs a newer GitHub release
   bin\
+    MLFilter_x64.ax        the filter
     benchmark_x64.exe      standalone benchmark
+    install_dependency.ps1 downloads the correct GPU architecture DLL
+    update.ps1             checks for and installs a newer GitHub release
     *.dll                  architecture-independent TensorRT DLLs
 ```
 
-The TensorRT DLLs are delay-loaded and `DllMain` prepends this `bin\` folder to the process
-search path, so the filter finds its bundled dependencies even though they live in a
-subfolder.
+The TensorRT DLLs are delay-loaded and `DllMain` prepends the filter's `bin\` folder to
+the process search path so the filter finds its bundled dependencies.

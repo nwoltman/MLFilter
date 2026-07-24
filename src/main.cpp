@@ -106,11 +106,11 @@ extern "C" DECLSPEC_NOINLINE auto WINAPI DllEntryPoint(HINSTANCE hInstance, ULON
 
 namespace {
 
-// In a redistributable release the .ax sits next to a "bin" subfolder holding the
-// bundled TensorRT + CUDA DLLs. Prepend it to the process PATH so the delay-loaded
-// TensorRT DLLs — and the CUDA/builder-resource DLLs TensorRT loads dynamically — are
-// found. No-op during development (no "bin" subfolder), where those DLLs are already on
-// PATH via TENSORRT_ROOT/CUDA_PATH.
+// In a redistributable release the .ax and its bundled TensorRT + CUDA DLLs all sit
+// in a "bin" folder. Prepend it to the process PATH so the delay-loaded TensorRT DLLs
+// and the CUDA/builder-resource DLLs TensorRT loads dynamically are found. No-op
+// during development, where the .ax is not in a "bin" folder and those DLLs are
+// already on PATH via TENSORRT_ROOT/CUDA_PATH.
 auto PrependBundledBinToPath(HMODULE module) -> void {
     std::array<wchar_t, MAX_PATH> modulePath {};
     const DWORD length = GetModuleFileNameW(module, modulePath.data(), static_cast<DWORD>(modulePath.size()));
@@ -118,9 +118,8 @@ auto PrependBundledBinToPath(HMODULE module) -> void {
         return;
     }
 
-    const std::filesystem::path binDir = std::filesystem::path(modulePath.data()).parent_path() / L"bin";
-    std::error_code ec;
-    if (!std::filesystem::exists(binDir, ec)) {
+    const std::filesystem::path binDir = std::filesystem::path(modulePath.data()).parent_path();
+    if (binDir.filename() != L"bin") {
         return;
     }
 

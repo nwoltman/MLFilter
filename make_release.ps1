@@ -56,7 +56,7 @@ $binDir = Join-Path $OutputDir "bin"
 New-Item -ItemType Directory -Path $binDir -Force | Out-Null
 
 Write-Step "Copying MLFilter_x64.ax"
-Copy-Item $axPath -Destination $OutputDir
+Copy-Item $axPath -Destination $binDir
 
 Write-Step "Copying benchmark"
 Copy-Item $benchmarkPath -Destination $binDir
@@ -91,7 +91,7 @@ Copy-Item (Join-Path $releaseScriptsDir "install.bat") -Destination $OutputDir
 Copy-Item (Join-Path $releaseScriptsDir "uninstall.bat") -Destination $OutputDir
 Copy-Item (Join-Path $releaseScriptsDir "update.bat") -Destination $OutputDir
 
-$dependencyScript = Get-Content (Join-Path $releaseScriptsDir "install_dependency.ps1") -Raw
+$dependencyScript = Get-Content (Join-Path $releaseScriptsDir "bin\install_dependency.ps1") -Raw
 $dependencyScript = $dependencyScript.Replace("__RELEASE_TAG__", $ReleaseTag)
 $dependencyScript = $dependencyScript.Replace("__REPOSITORY__", $Repository)
 $dependencyScript = $dependencyScript.Replace("__ARCHITECTURES__", ($ConsumerArchitectures -join '","'))
@@ -100,12 +100,12 @@ $assetMap = ($ConsumerArchitectures | ForEach-Object {
 }) -join [Environment]::NewLine
 $dependencyScript = $dependencyScript.Replace("    # __ASSET_MAP__", $assetMap)
 
-Set-Content (Join-Path $OutputDir "install_dependency.ps1") $dependencyScript -Encoding Ascii
+Set-Content (Join-Path $binDir "install_dependency.ps1") $dependencyScript -Encoding Ascii
 
-$updateScript = Get-Content (Join-Path $releaseScriptsDir "update.ps1") -Raw
+$updateScript = Get-Content (Join-Path $releaseScriptsDir "bin\update.ps1") -Raw
 $updateScript = $updateScript.Replace("__RELEASE_TAG__", $ReleaseTag)
 $updateScript = $updateScript.Replace("__REPOSITORY__", $Repository)
-Set-Content (Join-Path $OutputDir "update.ps1") $updateScript -Encoding Ascii
+Set-Content (Join-Path $binDir "update.ps1") $updateScript -Encoding Ascii
 
 $totalBytes = (Get-ChildItem $OutputDir -Recurse -File | Measure-Object Length -Sum).Sum
 $binCount = (Get-ChildItem $binDir -File).Count

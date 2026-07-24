@@ -26,7 +26,7 @@ try {
         throw "Unsupported NVIDIA GPU architecture(s): $($unsupported -join ', '). Supported: $($supportedArchitectures -join ', ')."
     }
 
-    $binDir = Join-Path $PSScriptRoot "bin"
+    $binDir = $PSScriptRoot
     New-Item -ItemType Directory -Path $binDir -Force | Out-Null
     foreach ($architecture in $architectures) {
         $assetName = $architectureAssets[$architecture]
