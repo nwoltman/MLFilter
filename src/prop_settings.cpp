@@ -15,6 +15,7 @@
 #include "engine/engine_naming.h"
 #include "engine/tensorrt_engine_builder.h"
 #include "resource.h"
+#include "version.h"
 
 #pragma comment(lib, "comdlg32")
 
@@ -55,6 +56,7 @@ auto CMLFilterPropSettings::OnActivate() -> HRESULT {
     SetDlgItemTextW(m_Dlg, IDC_EDIT_GLOBS, _settings.fileGlobs.c_str());
     CheckDlgButton(m_Dlg, IDC_CHECK_ONLY_1080P,
                    _settings.onlyRun1080pOrLower ? BST_CHECKED : BST_UNCHECKED);
+    SetDlgItemTextW(m_Dlg, IDC_STATIC_VERSION, VERSION_LABEL);
     return S_OK;
 }
 

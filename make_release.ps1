@@ -25,7 +25,14 @@ if (-not $env:TENSORRT_ROOT) { throw "TENSORRT_ROOT is not set. See README 'Deve
 if (-not $env:CUDA_PATH) { throw "CUDA_PATH is not set. Install the CUDA Toolkit." }
 
 Write-Step "Building MLFilter $Configuration|x64"
-& (Join-Path $PSScriptRoot "build.ps1") -Configuration $Configuration
+$buildArguments = @{
+    Configuration = $Configuration
+}
+if ($Version) {
+    $buildArguments.Version = $Version
+}
+
+& (Join-Path $PSScriptRoot "build.ps1") @buildArguments
 
 $axPath = Join-Path $PSScriptRoot "x64\$Configuration\MLFilter_x64.ax"
 if (-not (Test-Path $axPath)) {

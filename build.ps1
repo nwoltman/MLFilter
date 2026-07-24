@@ -3,13 +3,15 @@
 # Builds MLFilter. Locates MSBuild via vswhere and builds the
 # solution, so you don't need a Developer prompt.
 #
-# Usage:  .\build.ps1 [-Configuration Release|Debug] [-Rebuild]
+# Usage:  .\build.ps1 [-Configuration Release|Debug] [-Version 1.2.3] [-Rebuild]
 
 #Requires -Version 5.1
 [CmdletBinding()]
 param(
     [ValidateSet("Release", "Debug")]
     [string]$Configuration = "Release",
+    [ValidatePattern('^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$')]
+    [string]$Version,
     [switch]$Rebuild
 )
 
@@ -40,7 +42,20 @@ $target = if ($Rebuild) { "Rebuild" } else { "Build" }
 Write-Host "==> MSBuild: $msbuild" -ForegroundColor Cyan
 Write-Host "==> $target $Configuration|x64" -ForegroundColor Cyan
 
-& $msbuild $solution /t:$target /p:Configuration=$Configuration /p:Platform=x64 /m /v:minimal /nologo
+$msbuildArguments = @(
+    $solution,
+    "/t:$target",
+    "/p:Configuration=$Configuration",
+    "/p:Platform=x64",
+    "/m",
+    "/v:minimal",
+    "/nologo"
+)
+if ($Version) {
+    $msbuildArguments += "/p:MLFilterVersion=$Version"
+}
+
+& $msbuild @msbuildArguments
 if ($LASTEXITCODE -ne 0) {
     throw "Build failed (exit $LASTEXITCODE)."
 }

@@ -20,3 +20,4 @@
 #define IDC_EDIT_LOG          1008
 #define IDC_EDIT_GLOBS        1009
 #define IDC_CHECK_ONLY_1080P  1010
+#define IDC_STATIC_VERSION    1011
