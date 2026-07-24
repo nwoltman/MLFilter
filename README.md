@@ -5,8 +5,8 @@ A DirectShow filter for processing video frames with machine-learning models on 
 Supports FP16 and FP32 ONNX models.
 
 The filter is mainly intended to be used to upscale video with models like the
-[Anime JaNai HD V3 models](https://github.com/the-database/mpv-AnimeJaNai/releases/tag/3.0.0)
-(join the [JaNai Discord server](https://discord.gg/EeFfZUBvxj) to get their latest models).
+[latest Anime JaNai models](https://github.com/the-database/mpv-AnimeJaNai/tree/main/BuildMpvUpscale2xAnimeJaNai/mpv-upscale-2x_animejanai/animejanai/onnx)
+(or the [JaNai V3 models](https://github.com/the-database/mpv-AnimeJaNai/releases/tag/3.0.0)).
 
 ## How To Use
 
