@@ -19,7 +19,7 @@ The filter is mainly intended to be used to upscale video with models like the
 - Double-click the filter to open the filter configuration. Select an HD and/or an SD ONNX model.
   The SD model is used when either source dimension is below 720p (1280x720); otherwise
   the HD model is used. With neither model configured, the filter removes itself from the graph.
-- Press `Ctrl+Alt+J` to show the MLFilter Debug overlay when playing a video
+- Press `Ctrl+Alt+J` to show/hide the MLFilter Debug overlay when playing a video
 - To update MLFilter later, close any programs using MLFilter, right-click `update.bat`, and select
   **Run as administrator**. The updater only downloads files when a newer release is available.
 

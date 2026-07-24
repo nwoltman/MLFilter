@@ -118,7 +118,8 @@ auto FrameProcessor::Create(const std::filesystem::path &enginePath,
 FrameProcessor::~FrameProcessor() = default;
 
 auto FrameProcessor::Process(IMediaSample *in, IMediaSample *out, bool showDebugOverlay,
-                             double previousFrameMs, double &overlayOverheadMs,
+                             double previousFrameMs, uint64_t droppedFrames,
+                             double &overlayOverheadMs,
                              const D3D11DecoderState *d3d11State) -> HRESULT {
     overlayOverheadMs = 0;
 
@@ -229,7 +230,7 @@ auto FrameProcessor::Process(IMediaSample *in, IMediaSample *out, bool showDebug
 
         const auto cache = _session->GetOutputCacheStatus();
         _debugOverlay.Draw(dstBuffer, static_cast<size_t>(stride), _outW, _outH,
-                           {previousFrameMs, cache.cached, cache.capacity,
+                           {previousFrameMs, droppedFrames, cache.cached, cache.capacity,
                             cache.transientTransfers});
 
         const auto overlayEnd = std::chrono::steady_clock::now();

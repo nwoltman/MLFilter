@@ -167,7 +167,7 @@ auto DebugOverlay::Draw(uint8_t *frame, size_t stride, int width, int height,
         std::max(0, static_cast<int>(_engineLines.size()) - 1);
     const int desiredPanelWidth = 16 + static_cast<int>(longestLine) * GLYPH_ADVANCE;
     const int panelWidth = std::min(width, desiredPanelWidth);
-    const int panelHeight = std::min(height, 278 + extraEngineRows * 30);
+    const int panelHeight = std::min(height, 308 + extraEngineRows * 30);
 
     for (int y = 0; y < panelHeight; ++y) {
         std::memset(frame + static_cast<size_t>(y) * stride, 0,
@@ -193,10 +193,14 @@ auto DebugOverlay::Draw(uint8_t *frame, size_t stride, int width, int height,
                   static_cast<unsigned long long>(t.outputTransientTransfers));
     DrawText(frame, stride, width, height, TEXT_LEFT, 188 + streamOffset, line);
 
-    // A blank row separates stream information from the live metric.
+    std::snprintf(line, sizeof(line), "DROPPED FRAMES: %llu",
+                  static_cast<unsigned long long>(t.droppedFrames));
+    DrawText(frame, stride, width, height, TEXT_LEFT, 218 + streamOffset, line);
+
+    // A blank row separates the dropped-frame counter from the live timing metric.
     std::snprintf(line, sizeof(line), "%-11s %7.3F MS (MAX %.3F)",
                   "FRAME TIME", _displayedAverage, _displayedMaximum);
-    DrawText(frame, stride, width, height, TEXT_LEFT, 248 + streamOffset, line);
+    DrawText(frame, stride, width, height, TEXT_LEFT, 278 + streamOffset, line);
 }
 
 }

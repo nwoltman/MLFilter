@@ -10,6 +10,7 @@ namespace MLFilter {
 
 struct DebugOverlayTimings {
     double pipelineMs;
+    uint64_t droppedFrames;
     size_t outputCacheSize, outputCacheCapacity;
     uint64_t outputTransientTransfers;
 };

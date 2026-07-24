@@ -505,7 +505,7 @@ auto CMLFilter::Transform(IMediaSample *pIn, IMediaSample *pOut) -> HRESULT {
     double overlayOverheadMs = 0;
     const HRESULT result = _processor->Process(
         pIn, pOut, _debugOverlayEnabled.load(std::memory_order_relaxed), _previousFrameMs,
-        overlayOverheadMs, &d3d11State);
+        _droppedFrames, overlayOverheadMs, &d3d11State);
 
     if (d3d11State.context != nullptr) {
         d3d11State.context->Release();
@@ -523,6 +523,68 @@ auto CMLFilter::Transform(IMediaSample *pIn, IMediaSample *pOut) -> HRESULT {
         : 0;
 
     return result;
+}
+
+auto CMLFilter::Receive(IMediaSample *pSample) -> HRESULT {
+    CheckPointer(pSample, E_POINTER);
+
+    if (ShouldDropLateFrame(pSample)) {
+        ++_droppedFrames;
+        m_bSampleSkipped = TRUE;
+
+        if (!m_bQualityChanged) {
+            NotifyEvent(EC_QUALITY_CHANGE, 0, 0);
+            m_bQualityChanged = TRUE;
+        }
+
+        return S_OK;
+    }
+
+    return CTransformFilter::Receive(pSample);
+}
+
+auto CMLFilter::ShouldDropLateFrame(IMediaSample *sample) -> bool {
+    if (!_isRunning.load(std::memory_order_acquire)) {
+        return false;
+    }
+
+    REFERENCE_TIME frameStart = 0;
+    REFERENCE_TIME frameEnd = 0;
+    if (sample->GetTime(&frameStart, &frameEnd) != S_OK) {
+        return false;
+    }
+
+    CRefTime streamTime;
+    if (FAILED(StreamTime(streamTime))) {
+        return false;
+    }
+
+    return frameEnd <= static_cast<REFERENCE_TIME>(streamTime);
+}
+
+auto STDMETHODCALLTYPE CMLFilter::Run(REFERENCE_TIME tStart) -> HRESULT {
+    const HRESULT hr = CBaseFilter::Run(tStart);
+    if (SUCCEEDED(hr)) {
+        _isRunning.store(true, std::memory_order_release);
+    }
+
+    return hr;
+}
+
+auto STDMETHODCALLTYPE CMLFilter::Pause() -> HRESULT {
+    _isRunning.store(false, std::memory_order_release);
+    return CTransformFilter::Pause();
+}
+
+auto STDMETHODCALLTYPE CMLFilter::Stop() -> HRESULT {
+    _isRunning.store(false, std::memory_order_release);
+    return CTransformFilter::Stop();
+}
+
+auto CMLFilter::StartStreaming() -> HRESULT {
+    _droppedFrames = 0;
+    _previousFrameMs = -1;
+    return CTransformFilter::StartStreaming();
 }
 
 auto CMLFilter::CompleteConnect(PIN_DIRECTION direction, IPin *pReceivePin) -> HRESULT {

@@ -3,6 +3,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -38,6 +39,11 @@ public:
     auto GetMediaType(int iPosition, CMediaType *pMediaType) -> HRESULT override;
     auto DecideBufferSize(IMemAllocator *pAlloc, ALLOCATOR_PROPERTIES *pProps) -> HRESULT override;
     auto Transform(IMediaSample *pIn, IMediaSample *pOut) -> HRESULT override;
+    auto Receive(IMediaSample *pSample) -> HRESULT override;
+    auto STDMETHODCALLTYPE Run(REFERENCE_TIME tStart) -> HRESULT override;
+    auto STDMETHODCALLTYPE Pause() -> HRESULT override;
+    auto STDMETHODCALLTYPE Stop() -> HRESULT override;
+    auto StartStreaming() -> HRESULT override;
     auto CompleteConnect(PIN_DIRECTION direction, IPin *pReceivePin) -> HRESULT override;
     auto BreakConnect(PIN_DIRECTION direction) -> HRESULT override;
 
@@ -69,13 +75,17 @@ private:
     // Removes this filter from the graph on a worker thread.
     auto ScheduleSelfRemoval() -> void;
 
+    auto ShouldDropLateFrame(IMediaSample *sample) -> bool;
+
     std::unique_ptr<FrameProcessor> _processor;
     std::atomic<bool> _debugOverlayEnabled = false;
+    std::atomic<bool> _isRunning = false;
     HotkeyListener _hotkeyListener;
     std::atomic<bool> _removalScheduled = false;
     bool _inputFormatSupported = true;
     bool _inputFormatErrorReported = false;
     double _previousFrameMs = -1;
+    uint64_t _droppedFrames = 0;
     std::wstring _inputFormatDescription;
 };
 

@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -42,7 +43,7 @@ public:
     // Converts + infers + packs one frame's pixels into out (RGB48, top-down). Does not touch
     // timestamps/flags — the caller copies those. Returns an HRESULT.
     auto Process(IMediaSample *in, IMediaSample *out, bool showDebugOverlay,
-                 double previousFrameMs, double &overlayOverheadMs,
+                 double previousFrameMs, uint64_t droppedFrames, double &overlayOverheadMs,
                  const D3D11DecoderState *d3d11State = nullptr) -> HRESULT;
 
     auto UnregisterInputBuffers() -> void;
