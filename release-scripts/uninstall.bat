@@ -8,4 +8,3 @@ if %errorlevel% neq 0 (
 )
 echo Unregistering MLFilter...
 regsvr32 /u "%~dp0bin\MLFilter_x64.ax"
-pause
