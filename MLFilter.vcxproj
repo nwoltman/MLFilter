@@ -56,6 +56,7 @@
     <ClInclude Include="src\progress_window.h" />
     <ClInclude Include="src\prop_settings.h" />
     <ClInclude Include="src\registry.h" />
+    <ClInclude Include="src\renderer_diagnostics.h" />
     <ClInclude Include="src\resource.h" />
     <ClInclude Include="src\settings.h" />
     <ClInclude Include="src\version.h" />
@@ -87,6 +88,7 @@
       <PreprocessorDefinitions>MLFILTER_VERSION=$(MLFilterVersion);%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <ClCompile Include="src\registry.cpp" />
+    <ClCompile Include="src\renderer_diagnostics.cpp" />
     <ClCompile Include="src\settings.cpp" />
     <ClCompile Include="src\engine\engine_naming.cpp" />
     <ClCompile Include="src\engine\gpu_info.cpp" />

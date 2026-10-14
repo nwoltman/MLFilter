@@ -114,6 +114,42 @@ helper script (it locates MSBuild via vswhere, so no Developer prompt is needed)
 
 The output is `x64\Release\MLFilter_x64.ax`.
 
+### Temporary downstream format diagnostic
+
+This working-tree diagnostic is enabled automatically in both Release and Debug builds. It logs
+the immediate downstream pin's advertised media types and checks 22 candidate pixel formats with
+`IPin::QueryAccept` before MLFilter attempts its normal RGB48 connection. It does not change
+MLFilter's output format or deliver test frames.
+
+1. Close PotPlayer, build with `.\build.ps1`, and register the build with `install_dev.bat`.
+2. Select PotPlayer's **Built-in Direct3D 11 Video Renderer**, enable MLFilter as an external
+   filter, and configure an ONNX model as usual. Use a video that meets MLFilter's resolution
+   and file-pattern settings so the filter stays in the graph.
+3. Open that video once. A report is written even if output negotiation fails and playback
+   cannot start, provided PotPlayer attempts to connect MLFilter's output.
+4. Open `%LOCALAPPDATA%\MLFilter\Logs\` and find the newest `renderer-formats-<PID>.log`.
+   Reports append for each connection attempt in the player process; restarting PotPlayer
+   normally creates a new file. Look at `Downstream filter` to confirm which filter was queried,
+   then search for `SUMMARY` to see which candidates passed at least one header variant.
+
+If `Downstream filter` names a subtitle or video processing filter, these are that filter's
+results. Disable the intervening filter and repeat to query the renderer directly. There may
+be several connection attempts to different filters in the same log, so read each section's
+identity rather than combining their results.
+
+Advertised types are preferences, not necessarily a complete capability list. `ACCEPTED` means
+only that `QueryAccept` returned `S_OK` for the logged dimensions, header, orientation and color
+metadata. It does not prove successful connection/playback, GPU texture delivery, HDR handling,
+or preservation of all channel bits. Candidate probes include RGB48, BGR48, Y416, Y410, P016,
+P010 and common 4:2:2/8-bit formats. They test `VideoInfo2` with and without color tags and
+`VideoInfo` without tags; standard RGB DIBs also test both height signs. Tagged YUV probes use
+limited-range BT.709. Skipped variants and HRESULT errors are recorded separately.
+
+To remove the diagnostic after collecting the report, remove the `Connect` override and
+diagnostic include from `src/output_pin.cpp` and its declaration from `src/output_pin.h`,
+delete `src/renderer_diagnostics.h` and `src/renderer_diagnostics.cpp`, and remove their entries
+from `MLFilter.vcxproj` and this README section.
+
 ## Registering the filter
 
 For local testing, register the built `.ax` with `install_dev.bat` (it self-elevates and
