@@ -55,6 +55,8 @@ auto SubtypeText(const GUID &guid) -> std::string {
     if (guid == MEDIASUBTYPE_RGB24) { return "RGB24 " + GuidText(guid); }
     if (guid == MEDIASUBTYPE_RGB32) { return "RGB32 " + GuidText(guid); }
     if (guid == MEDIASUBTYPE_ARGB32) { return "ARGB32 " + GuidText(guid); }
+    if (guid == MEDIASUBTYPE_A2B10G10R10) { return "A2B10G10R10 " + GuidText(guid); }
+    if (guid == MEDIASUBTYPE_A2R10G10B10) { return "A2R10G10B10 " + GuidText(guid); }
 
     if (guid == FOURCCMap(guid.Data1)) {
         std::string fourcc;
@@ -97,6 +99,13 @@ auto DescribeMediaType(const AM_MEDIA_TYPE &type) -> std::string {
         text << " dimensions=" << bih->biWidth << 'x' << bih->biHeight
              << " storageBitsPerPixel=" << bih->biBitCount
              << " compression=" << Hex(bih->biCompression) << " imageBytes=" << bih->biSizeImage;
+
+        const ULONG headerBytes = type.formattype == FORMAT_VideoInfo2 ? sizeof(VIDEOINFOHEADER2)
+                                                                     : sizeof(VIDEOINFOHEADER);
+        if (bih->biCompression == BI_BITFIELDS && type.cbFormat >= headerBytes + 3 * sizeof(DWORD)) {
+            const auto *masks = reinterpret_cast<const DWORD *>(bih + 1);
+            text << " RGBMasks=" << Hex(masks[0]) << ',' << Hex(masks[1]) << ',' << Hex(masks[2]);
+        }
     }
     if (type.pbFormat != nullptr && type.formattype == FORMAT_VideoInfo2 &&
         type.cbFormat >= sizeof(VIDEOINFOHEADER2)) {
@@ -164,6 +173,9 @@ struct Candidate {
     unsigned chromaDivisor; // 2 = 4:2:2, 4 = 4:2:0, 1 = full resolution / RGB
     bool rgb = false;
     bool dib = false;
+    DWORD redMask = 0;
+    DWORD greenMask = 0;
+    DWORD blueMask = 0;
 };
 
 auto FourccCandidate(const char *name, const char *fourcc, WORD storageBits,
@@ -202,7 +214,9 @@ auto BuildCandidate(const Candidate &candidate, const CMediaType &reference,
     type.SetTemporalCompression(FALSE);
     type.SetSampleSize(static_cast<ULONG>(imageBytes));
 
-    const ULONG formatBytes = videoInfo2 ? sizeof(VIDEOINFOHEADER2) : sizeof(VIDEOINFOHEADER);
+    const ULONG headerBytes = videoInfo2 ? sizeof(VIDEOINFOHEADER2) : sizeof(VIDEOINFOHEADER);
+    const ULONG maskBytes = candidate.compression == BI_BITFIELDS ? 3 * sizeof(DWORD) : 0;
+    const ULONG formatBytes = headerBytes + maskBytes;
     BYTE *buffer = type.AllocFormatBuffer(formatBytes);
     if (buffer == nullptr) {
         return E_OUTOFMEMORY;
@@ -258,6 +272,15 @@ auto BuildCandidate(const Candidate &candidate, const CMediaType &reference,
     bih->biBitCount = candidate.storageBits;
     bih->biCompression = candidate.compression;
     bih->biSizeImage = static_cast<DWORD>(imageBytes);
+
+    if (candidate.compression == BI_BITFIELDS) {
+        // BITMAPINFOHEADER is followed by three DWORD masks in R, G, B order.
+        // The two alpha bits are identified by the DirectShow subtype.
+        auto *masks = reinterpret_cast<DWORD *>(bih + 1);
+        masks[0] = candidate.redMask;
+        masks[1] = candidate.greenMask;
+        masks[2] = candidate.blueMask;
+    }
 
     return S_OK;
 }
@@ -336,6 +359,14 @@ auto LogDownstreamFormats(IPin *pin, const CMediaType *reference) noexcept -> vo
             FourccCandidate("BGR48 (BGR0)", "BGR0", 48, 1, true),
             FourccCandidate("Y416", "Y416", 64, 1),
             FourccCandidate("Y410", "Y410", 32, 1),
+            // SDK DirectShow GUIDs; these are distinct from the Media Foundation RGB GUIDs.
+            // Probe both subtype-only BI_RGB and explicit BI_BITFIELDS representations.
+            {"A2B10G10R10 (BI_RGB)", MEDIASUBTYPE_A2B10G10R10, BI_RGB, 32, 1, true, true},
+            {"A2B10G10R10 (BI_BITFIELDS)", MEDIASUBTYPE_A2B10G10R10, BI_BITFIELDS, 32, 1, true, true,
+             0x000003FF, 0x000FFC00, 0x3FF00000},
+            {"A2R10G10B10 (BI_RGB)", MEDIASUBTYPE_A2R10G10B10, BI_RGB, 32, 1, true, true},
+            {"A2R10G10B10 (BI_BITFIELDS)", MEDIASUBTYPE_A2R10G10B10, BI_BITFIELDS, 32, 1, true, true,
+             0x3FF00000, 0x000FFC00, 0x000003FF},
             FourccCandidate("P216", "P216", 32, 2),
             FourccCandidate("P210", "P210", 32, 2),
             FourccCandidate("Y216", "Y216", 32, 2),

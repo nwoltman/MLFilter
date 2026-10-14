@@ -117,7 +117,7 @@ The output is `x64\Release\MLFilter_x64.ax`.
 ### Temporary downstream format diagnostic
 
 This working-tree diagnostic is enabled automatically in both Release and Debug builds. It logs
-the immediate downstream pin's advertised media types and checks 22 candidate pixel formats with
+the immediate downstream pin's advertised media types and checks 24 candidate pixel formats with
 `IPin::QueryAccept` before MLFilter attempts its normal RGB48 connection. It does not change
 MLFilter's output format or deliver test frames.
 
@@ -144,6 +144,12 @@ or preservation of all channel bits. Candidate probes include RGB48, BGR48, Y416
 P010 and common 4:2:2/8-bit formats. They test `VideoInfo2` with and without color tags and
 `VideoInfo` without tags; standard RGB DIBs also test both height signs. Tagged YUV probes use
 limited-range BT.709. Skipped variants and HRESULT errors are recorded separately.
+
+The packed 10-bit RGB subtypes `MEDIASUBTYPE_A2B10G10R10` and `MEDIASUBTYPE_A2R10G10B10`
+are also probed. Each tests both `BI_RGB` and `BI_BITFIELDS` headers, with explicit R/G/B
+channel masks for the latter. Both row orientations and all three header/color-tag variants
+are checked for each representation. Search for `SUMMARY A2B10G10R10` and
+`SUMMARY A2R10G10B10` in the log; each has separate summaries for the two representations.
 
 To remove the diagnostic after collecting the report, remove the `Connect` override and
 diagnostic include from `src/output_pin.cpp` and its declaration from `src/output_pin.h`,
