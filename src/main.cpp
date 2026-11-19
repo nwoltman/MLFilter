@@ -64,12 +64,15 @@ auto RegisterFilter(BOOL doRegister) -> HRESULT {
     }
 
     static const REGPINTYPES inputType { .clsMajorType = &MEDIATYPE_Video, .clsMinorType = &GUID_NULL };
-    static const REGPINTYPES outputType { .clsMajorType = &MEDIATYPE_Video, .clsMinorType = &OutputSubtype() };
+    static const REGPINTYPES outputTypes[] {
+        { .clsMajorType = &MEDIATYPE_Video, .clsMinorType = &Rgb48Subtype() },
+        { .clsMajorType = &MEDIATYPE_Video, .clsMinorType = &Y410Subtype() },
+    };
 
     REG_PINS[0].nMediaTypes = 1;
     REG_PINS[0].lpMediaType = &inputType;
-    REG_PINS[1].nMediaTypes = 1;
-    REG_PINS[1].lpMediaType = &outputType;
+    REG_PINS[1].nMediaTypes = static_cast<UINT>(std::size(outputTypes));
+    REG_PINS[1].lpMediaType = outputTypes;
 
     return AMovieDllRegisterServer2(TRUE);
 }

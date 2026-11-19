@@ -10,6 +10,7 @@
 
 #include <windows.h>
 
+#include "color/packed_output.h"
 #include "color/yuv420_format.h"
 
 struct ID3D11Texture2D;
@@ -54,8 +55,7 @@ public:
     auto OutputWidth() const -> int { return _outW; }
     auto OutputHeight() const -> int { return _outH; }
 
-    // Sizes in bytes of the planar-RGB fp16 input/output buffers (3 * W * H * sizeof(half)). The
-    // packed RGB48 buffer Infer() produces is the same size (also 3 * W * H * 2 bytes).
+    // Sizes in bytes of the planar-RGB fp16 input/output buffers (3 * W * H * sizeof(half)).
     auto InputBytes() const -> size_t { return static_cast<size_t>(3) * _inW * _inH * sizeof(unsigned short); }
     auto OutputBytes() const -> size_t { return static_cast<size_t>(3) * _outW * _outH * sizeof(unsigned short); }
 
@@ -80,14 +80,15 @@ public:
                            HANDLE contextMutex,
                            const Yuv420Conversion &conversion) -> bool;
 
-    // Runs the network. RGB48 packing is deferred until Download(), when the renderer's mapped
+    // Runs the network. Output packing is deferred until Download(), when the renderer's mapped
     // output address and row stride are known. Returns false on a CUDA/TensorRT error.
     auto Infer() -> bool;
 
-    // Maps each new renderer allocator buffer and packs RGB48 directly into it from the GPU.
-    // dstStrideBytes may exceed width*6. Mapping failure falls back to packing in device memory
+    // Maps each new renderer allocator buffer and packs directly into it from the GPU.
+    // dstStrideBytes may exceed the packed row size. Mapping failure falls back to device packing
     // followed by a pageable transfer. Blocks until the whole stream has completed.
-    auto Download(void *hostOutput, size_t dstStrideBytes, size_t hostBufferBytes) -> bool;
+    auto Download(void *hostOutput, size_t dstStrideBytes, size_t hostBufferBytes,
+                  PackedOutputFormat format = PackedOutputFormat::Rgb48, bool bt709 = true) -> bool;
 
     auto UnregisterInputBuffers() -> void;
     auto UnregisterOutputBuffers() -> void;
@@ -131,7 +132,7 @@ private:
     void *_dInput = nullptr;
     void *_dYuv = nullptr;
     void *_dOutput = nullptr;
-    void *_dRgb48 = nullptr;
+    void *_dPackedOutput = nullptr;
 
     struct MappedOutput {
         void *deviceAddress = nullptr;
@@ -150,10 +151,8 @@ private:
     auto AcquireMappedOutput(void *hostOutput,
                              size_t hostBufferBytes,
                              size_t requiredBytes) -> MappedOutput;
-    auto QueueMappedOutput(void *deviceOutput, size_t dstStrideBytes) -> bool;
-    auto QueuePageableOutput(void *hostOutput,
-                             size_t dstStrideBytes,
-                             size_t rowBytes) -> bool;
+    auto QueuePackedOutput(void *deviceOutput, size_t dstStrideBytes,
+                           PackedOutputFormat format, bool bt709) -> bool;
 
     std::vector<HostRegistration> _inputHostRegistrations;
     std::vector<HostRegistration> _outputHostRegistrations;

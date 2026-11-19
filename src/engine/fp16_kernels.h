@@ -34,4 +34,14 @@ auto LaunchFp16PlanarToRgb48(const void *dPlanarFp16,
                              int height,
                              cudaStream_t stream) -> cudaError_t;
 
+// Packs top-down limited-range 10-bit Y'CbCr with opaque alpha into Y410. The destination
+// and stride must be DWORD-aligned. Like RGB48, this can write to mapped host memory.
+auto LaunchFp16PlanarToY410(const void *dPlanarFp16,
+                            void *dPackedY410,
+                            size_t dstStrideBytes,
+                            int width,
+                            int height,
+                            bool bt709,
+                            cudaStream_t stream) -> cudaError_t;
+
 }

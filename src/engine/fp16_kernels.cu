@@ -294,6 +294,7 @@ constexpr unsigned kRgb48BlockSize = 256;
 constexpr unsigned kRgb48ComponentsPerPixel = 3;
 constexpr unsigned kRgb48ComponentsPerVector = sizeof(uint4) / sizeof(uint16_t);
 constexpr unsigned kRgb48TileComponents = kRgb48BlockSize * kRgb48ComponentsPerPixel;
+constexpr unsigned kY410BlockSize = 256;
 
 // One thread per output pixel converts the three planar channels into an interleaved shared-memory
 // tile. Each block stays within one row, allowing the destination to use the renderer allocator's
@@ -361,6 +362,39 @@ __global__ void Fp16PlanarToRgb48Kernel(const __half *__restrict__ r,
     }
 }
 
+__global__ void Fp16PlanarToY410Kernel(const __half *__restrict__ src,
+                                       unsigned char *__restrict__ dst,
+                                       size_t dstStrideBytes,
+                                       int width,
+                                       int height,
+                                       bool bt709) {
+    const int x = blockIdx.x * blockDim.x + threadIdx.x;
+    const int y = blockIdx.y;
+    if (x >= width) {
+        return;
+    }
+
+    const size_t plane = static_cast<size_t>(width) * height;
+    const size_t i = static_cast<size_t>(y) * width + x;
+    const float r = Clamp01(__half2float(src[i]));
+    const float g = Clamp01(__half2float(src[plane + i]));
+    const float b = Clamp01(__half2float(src[2 * plane + i]));
+
+    const float kr = bt709 ? 0.2126f : 0.299f;
+    const float kb = bt709 ? 0.0722f : 0.114f;
+    const float yPrime = fmaf(kr, r - g, fmaf(kb, b - g, g));
+
+    // BT.601/709 non-constant-luminance matrix and 10-bit studio-range quantization.
+    const float cbScale = bt709 ? 896.0f / kBt709BlueFromCb : 896.0f / kBt601BlueFromCb;
+    const float crScale = bt709 ? 896.0f / kBt709RedFromCr : 896.0f / kBt601RedFromCr;
+    const unsigned luma = __float2uint_rn(fmaf(876.0f, yPrime, 64.0f));
+    const unsigned cb = __float2uint_rn(fmaf(cbScale, b - yPrime, 512.0f));
+    const unsigned cr = __float2uint_rn(fmaf(crScale, r - yPrime, 512.0f));
+
+    auto *row = reinterpret_cast<uint32_t *>(dst + static_cast<size_t>(y) * dstStrideBytes);
+    row[x] = (3u << 30) | (cr << 20) | (luma << 10) | cb;
+}
+
 }
 
 auto LaunchYuv420ToFp16Planar(const void *dYuv,
@@ -409,6 +443,22 @@ auto LaunchFp16PlanarToRgb48(const void *dPlanarFp16,
                     static_cast<unsigned>(height));
     Fp16PlanarToRgb48Kernel<<<grid, block, 0, stream>>>(
         r, g, b, static_cast<unsigned char *>(dPackedRgb48), dstStrideBytes, width, height);
+    return cudaGetLastError();
+}
+
+auto LaunchFp16PlanarToY410(const void *dPlanarFp16,
+                            void *dPackedY410,
+                            size_t dstStrideBytes,
+                            int width,
+                            int height,
+                            bool bt709,
+                            cudaStream_t stream) -> cudaError_t {
+    const dim3 block(kY410BlockSize);
+    const dim3 grid((static_cast<unsigned>(width) + block.x - 1) / block.x,
+                    static_cast<unsigned>(height));
+    Fp16PlanarToY410Kernel<<<grid, block, 0, stream>>>(
+        static_cast<const __half *>(dPlanarFp16), static_cast<unsigned char *>(dPackedY410),
+        dstStrideBytes, width, height, bt709);
     return cudaGetLastError();
 }
 

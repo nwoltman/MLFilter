@@ -48,6 +48,7 @@
     <ClInclude Include="src\hotkey_listener.h" />
     <ClInclude Include="src\input_pin.h" />
     <ClInclude Include="src\output_pin.h" />
+    <ClInclude Include="src\color\packed_output.h" />
     <ClInclude Include="src\color\yuv420_format.h" />
     <ClInclude Include="src\engine\cuda_raii.h" />
     <ClInclude Include="src\engine\d3d11_cuda_input.h" />

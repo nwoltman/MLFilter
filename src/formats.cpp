@@ -35,9 +35,14 @@ auto IsSupportedInputSubtype(const GUID &subtype) -> bool {
     return false;
 }
 
-auto OutputSubtype() -> const GUID & {
+auto Rgb48Subtype() -> const GUID & {
     // RGB48: 16-bit-per-channel packed RGB, FOURCC 'RGB0' (same subtype LAV/avisynth_filter use).
-    static const GUID subtype = FOURCCMap(Fourcc('R', 'G', 'B', '0'));
+    static const GUID subtype = FOURCCMap(kRgb48Fourcc);
+    return subtype;
+}
+
+auto Y410Subtype() -> const GUID & {
+    static const GUID subtype = FOURCCMap(kY410Fourcc);
     return subtype;
 }
 

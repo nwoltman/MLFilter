@@ -528,6 +528,81 @@ auto RunFp16PlanarToRgb48Test() -> bool {
     return true;
 }
 
+auto RunFp16PlanarToY410Test(bool bt709) -> bool {
+    struct Sample {
+        uint16_t rgb[3];
+        unsigned yuv601[3];
+        unsigned yuv709[3];
+    };
+    // Expected limited-range Y', Cb, Cr codes for black, white, primaries, and half-step grays.
+    constexpr Sample samples[] {
+        {{0xBC00, 0, 0},              {64, 512, 512},  {64, 512, 512}},
+        {{0x4000, 0x3C00, 0x3C00},   {940, 512, 512}, {940, 512, 512}},
+        {{0x3C00, 0, 0},              {326, 361, 960}, {250, 409, 960}},
+        {{0, 0x3C00, 0},              {578, 215, 137}, {691, 167, 105}},
+        {{0, 0, 0x3C00},              {164, 960, 439}, {127, 960, 471}},
+        {{0x3000, 0x3000, 0x3000},   {174, 512, 512}, {174, 512, 512}},
+        {{0x3600, 0x3600, 0x3600},   {392, 512, 512}, {392, 512, 512}},
+    };
+    constexpr int width = 257;
+    constexpr int height = 3;
+    constexpr size_t pixels = width * height;
+    constexpr size_t pitch = width + 3;
+    constexpr uint32_t padding = 0xDEADBEEF;
+
+    std::vector<uint16_t> planar(pixels * 3);
+    std::vector<uint32_t> expected(pitch * height, padding);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const size_t i = y * width + x;
+            const auto &sample = samples[i % std::size(samples)];
+            for (size_t channel = 0; channel < 3; ++channel) {
+                planar[channel * pixels + i] = sample.rgb[channel];
+            }
+            const auto &yuv = bt709 ? sample.yuv709 : sample.yuv601;
+            expected[y * pitch + x] = 0xC0000000u | (yuv[2] << 20) | (yuv[0] << 10) | yuv[1];
+        }
+    }
+
+    DeviceBuffer devicePlanar;
+    DeviceBuffer devicePacked;
+    std::vector<uint32_t> actual(expected.size(), padding);
+    const size_t inputBytes = planar.size() * sizeof(planar[0]);
+    const size_t outputBytes = actual.size() * sizeof(actual[0]);
+    constexpr size_t rowBytes = pitch * sizeof(uint32_t);
+    if (cudaMalloc(&devicePlanar.data, inputBytes) != cudaSuccess ||
+        cudaMalloc(&devicePacked.data, outputBytes) != cudaSuccess ||
+        cudaMemcpy(devicePlanar.data, planar.data(), inputBytes, cudaMemcpyHostToDevice) != cudaSuccess ||
+        cudaMemcpy(devicePacked.data, actual.data(), outputBytes, cudaMemcpyHostToDevice) != cudaSuccess ||
+        MLFilter::LaunchFp16PlanarToY410(devicePlanar.data, devicePacked.data, rowBytes,
+                                       width, height, bt709, nullptr) != cudaSuccess ||
+        cudaMemcpy(actual.data(), devicePacked.data, outputBytes, cudaMemcpyDeviceToHost) != cudaSuccess ||
+        actual != expected) {
+        printf("  BT.%s Y410 device output failed code or padding verification\n", bt709 ? "709" : "601");
+        return false;
+    }
+
+    std::fill(actual.begin(), actual.end(), padding);
+    HostRegistration registration;
+    if (cudaHostRegister(actual.data(), outputBytes, cudaHostRegisterMapped) != cudaSuccess) {
+        printf("  Y410 output registration failed\n");
+        return false;
+    }
+    registration.address = actual.data();
+
+    void *mapped = nullptr;
+    if (cudaHostGetDevicePointer(&mapped, actual.data(), 0) != cudaSuccess ||
+        MLFilter::LaunchFp16PlanarToY410(devicePlanar.data, mapped, rowBytes,
+                                       width, height, bt709, nullptr) != cudaSuccess ||
+        cudaDeviceSynchronize() != cudaSuccess || actual != expected) {
+        printf("  BT.%s Y410 mapped output failed code or padding verification\n", bt709 ? "709" : "601");
+        return false;
+    }
+
+    printf("  BT.%s Y410 device/mapped packing and row padding: exact\n", bt709 ? "709" : "601");
+    return true;
+}
+
 }
 
 auto main() -> int {
@@ -547,6 +622,12 @@ auto main() -> int {
     ++total;
     if (!RunFp16PlanarToRgb48Test()) {
         ++failures;
+    }
+    for (const bool bt709 : {false, true}) {
+        ++total;
+        if (!RunFp16PlanarToY410Test(bt709)) {
+            ++failures;
+        }
     }
 
     const auto run = [&](MLFilter::Yuv420Format format, bool bt709, Pattern pattern) {

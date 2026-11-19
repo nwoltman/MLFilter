@@ -111,10 +111,13 @@ auto InferenceSession::Create(const std::filesystem::path &enginePath, std::wstr
         return nullptr;
     }
 
+    // The device staging buffer is sized for RGB48, the larger packed format.
+    const size_t packedOutputBytes = static_cast<size_t>(session->_outW) * session->_outH *
+        PackedOutputBytesPerPixel(PackedOutputFormat::Rgb48);
     if (cudaMalloc(&session->_dInput, session->InputBytes()) != cudaSuccess ||
         cudaMalloc(&session->_dYuv, static_cast<size_t>(session->_inW) * session->_inH * 3) != cudaSuccess ||
         cudaMalloc(&session->_dOutput, session->OutputBytes()) != cudaSuccess ||
-        cudaMalloc(&session->_dRgb48, session->OutputBytes()) != cudaSuccess) {
+        cudaMalloc(&session->_dPackedOutput, packedOutputBytes) != cudaSuccess) {
         error = L"Failed to allocate GPU memory for inference.";
         return nullptr;
     }
@@ -172,7 +175,7 @@ InferenceSession::~InferenceSession() {
     cudaFree(_dInput);
     cudaFree(_dYuv);
     cudaFree(_dOutput);
-    cudaFree(_dRgb48);
+    cudaFree(_dPackedOutput);
     // TensorRT 10/11 objects are released with delete (destroy() was removed).
     delete _context;
     delete _engine;
@@ -291,12 +294,14 @@ auto InferenceSession::AcquireMappedOutput(void *hostOutput,
     }
 
     if (cudaHostRegister(hostOutput, hostBufferBytes, cudaHostRegisterMapped) != cudaSuccess) {
+        cudaGetLastError(); // Clear the mapping error before the staging kernel launch.
         return {};
     }
 
     void *deviceOutput = nullptr;
     if (cudaHostGetDevicePointer(&deviceOutput, hostOutput, 0) != cudaSuccess) {
         cudaHostUnregister(hostOutput);
+        cudaGetLastError();
         return {};
     }
 
@@ -309,38 +314,42 @@ auto InferenceSession::AcquireMappedOutput(void *hostOutput,
     return {.deviceAddress = deviceOutput, .transient = true};
 }
 
-auto InferenceSession::QueueMappedOutput(void *deviceOutput, size_t dstStrideBytes) -> bool {
+auto InferenceSession::QueuePackedOutput(void *deviceOutput, size_t dstStrideBytes,
+                                         PackedOutputFormat format, bool bt709) -> bool {
+    if (format == PackedOutputFormat::Y410) {
+        return LaunchFp16PlanarToY410(
+            _dOutput, deviceOutput, dstStrideBytes, _outW, _outH, bt709, _stream) == cudaSuccess;
+    }
+
     return LaunchFp16PlanarToRgb48(
         _dOutput, deviceOutput, dstStrideBytes, _outW, _outH, _stream) == cudaSuccess;
 }
 
-auto InferenceSession::QueuePageableOutput(void *hostOutput,
-                                           size_t dstStrideBytes,
-                                           size_t rowBytes) -> bool {
-    if (LaunchFp16PlanarToRgb48(
-            _dOutput, _dRgb48, rowBytes, _outW, _outH, _stream) != cudaSuccess) {
+auto InferenceSession::Download(void *hostOutput, size_t dstStrideBytes, size_t hostBufferBytes,
+                                 PackedOutputFormat format, bool bt709) -> bool {
+    const size_t rowBytes = static_cast<size_t>(_outW) * PackedOutputBytesPerPixel(format);
+    const size_t alignment = format == PackedOutputFormat::Y410 ? alignof(uint32_t) : alignof(uint16_t);
+    const bool aligned = reinterpret_cast<uintptr_t>(hostOutput) % alignment == 0;
+    if (hostOutput == nullptr || (format == PackedOutputFormat::Rgb48 && !aligned) ||
+        dstStrideBytes % alignment != 0 || dstStrideBytes < rowBytes ||
+        dstStrideBytes > hostBufferBytes / static_cast<size_t>(_outH)) {
         return false;
     }
 
-    return cudaMemcpy2DAsync(hostOutput, dstStrideBytes, _dRgb48, rowBytes, rowBytes, _outH,
-                             cudaMemcpyDeviceToHost, _stream) == cudaSuccess;
-}
-
-auto InferenceSession::Download(void *hostOutput, size_t dstStrideBytes, size_t hostBufferBytes) -> bool {
-    const size_t rowBytes = static_cast<size_t>(_outW) * 3 * sizeof(uint16_t);
-    if (hostOutput == nullptr ||
-        (reinterpret_cast<uintptr_t>(hostOutput) & (alignof(uint16_t) - 1)) != 0 ||
-        dstStrideBytes < rowBytes ||
-        (dstStrideBytes & (alignof(uint16_t) - 1)) != 0) {
-        return false;
-    }
-
+    // A renderer's sample prefix can leave a Y410 payload unaligned. Pack that frame into
+    // aligned device memory and copy the rows into the sample as bytes.
     const size_t requiredBytes = dstStrideBytes * static_cast<size_t>(_outH);
-    const MappedOutput mapped =
-        AcquireMappedOutput(hostOutput, hostBufferBytes, requiredBytes);
-    const bool outputQueued = mapped.deviceAddress != nullptr
-        ? QueueMappedOutput(mapped.deviceAddress, dstStrideBytes)
-        : QueuePageableOutput(hostOutput, dstStrideBytes, rowBytes);
+    const MappedOutput mapped = aligned
+        ? AcquireMappedOutput(hostOutput, hostBufferBytes, requiredBytes)
+        : MappedOutput {};
+    bool outputQueued;
+    if (mapped.deviceAddress != nullptr) {
+        outputQueued = QueuePackedOutput(mapped.deviceAddress, dstStrideBytes, format, bt709);
+    } else {
+        outputQueued = QueuePackedOutput(_dPackedOutput, rowBytes, format, bt709) &&
+            cudaMemcpy2DAsync(hostOutput, dstStrideBytes, _dPackedOutput, rowBytes, rowBytes, _outH,
+                              cudaMemcpyDeviceToHost, _stream) == cudaSuccess;
+    }
 
     bool completed = false;
     if (outputQueued) {
@@ -385,7 +394,7 @@ auto InferenceSession::GetOutputCacheStatus() const -> OutputCacheStatus {
 #ifdef MLFILTER_ENABLE_STAGE_TIMINGS
 auto InferenceSession::LastGpuTimings(GpuStageTimings &timings) const -> bool {
     // Download() synchronized the stream, so all markers have completed. Adjacent event pairs
-    // isolate H2D, preprocessing, TensorRT, and fused RGB48 host output on the GPU timeline.
+    // isolate H2D, preprocessing, TensorRT, and packed host output on the GPU timeline.
     float upload = 0, preprocess = 0, inference = 0, output = 0;
     if (cudaEventElapsedTime(&upload, _evStart, _evUploaded) != cudaSuccess ||
         cudaEventElapsedTime(&preprocess, _evUploaded, _evPreprocessed) != cudaSuccess ||

@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "color/packed_output.h"
+
 namespace MLFilter {
 
 struct DebugOverlayTimings {
@@ -21,7 +23,7 @@ public:
                        const char *inputFormat, bool bt709, bool fullRange,
                        int outputWidth, int outputHeight) -> void;
     auto SetTransportInfo(std::string transportLine) -> void;
-    auto Draw(uint8_t *frame, size_t strideBytes, int width, int height,
+    auto Draw(uint8_t *frame, size_t strideBytes, int width, int height, PackedOutputFormat format,
               const DebugOverlayTimings &timings) -> void;
 
 private:

@@ -18,7 +18,7 @@ class MLFilterOutputPin;
 class MLFilterInputPin;
 
 // Copy transform: converts a supported 4:2:0 YUV input frame to RGB, runs the TensorRT engine, and
-// emits RGB48 downstream (a different pixel format and possibly a larger resolution than the
+// emits RGB48 or Y410 downstream (a different pixel format and possibly a larger resolution than the
 // input, which is why this is a copy transform rather than transform-in-place).
 class CMLFilter
     : public CTransformFilter
@@ -84,6 +84,7 @@ private:
     std::atomic<bool> _removalScheduled = false;
     bool _inputFormatSupported = true;
     bool _inputFormatErrorReported = false;
+    int _y410Stride = 0;
     double _previousFrameMs = -1;
     uint64_t _droppedFrames = 0;
     std::wstring _inputFormatDescription;

@@ -14,13 +14,8 @@ auto SupportedInputSubtypes() -> const std::vector<GUID> &;
 
 auto IsSupportedInputSubtype(const GUID &subtype) -> bool;
 
-// The single subtype the filter emits downstream: 16-bit-per-channel packed RGB (RGB48).
-auto OutputSubtype() -> const GUID &;
-
-// Byte stride of one RGB48 row (6 bytes per pixel). LAV/madVR use an unpadded width*6 stride
-// for this packed FOURCC format. Used identically by the output media type, allocator sizing,
-// and the RGB48 packing so they agree.
-inline auto Rgb48Stride(int width) -> int { return width * 6; }
+auto Rgb48Subtype() -> const GUID &;
+auto Y410Subtype() -> const GUID &;
 
 // Packs four characters into a little-endian FOURCC DWORD (e.g. for FOURCCMap).
 inline constexpr auto Fourcc(char a, char b, char c, char d) -> DWORD {
@@ -29,5 +24,8 @@ inline constexpr auto Fourcc(char a, char b, char c, char d) -> DWORD {
          | (static_cast<DWORD>(static_cast<unsigned char>(c)) << 16)
          | (static_cast<DWORD>(static_cast<unsigned char>(d)) << 24);
 }
+
+inline constexpr DWORD kRgb48Fourcc = Fourcc('R', 'G', 'B', '0');
+inline constexpr DWORD kY410Fourcc = Fourcc('Y', '4', '1', '0');
 
 }

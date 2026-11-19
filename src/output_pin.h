@@ -13,9 +13,12 @@ class MLFilterOutputPin final : public CTransformOutputPin {
 public:
     MLFilterOutputPin(CMLFilter *filter, HRESULT *result);
 
+    auto STDMETHODCALLTYPE Connect(IPin *receivePin, const AM_MEDIA_TYPE *mediaType) -> HRESULT override;
     auto Inactive() -> HRESULT override;
 
 private:
+    auto ShouldTryY410(HRESULT rgb48Result) -> bool;
+
     CMLFilter *_filter;
 };
 

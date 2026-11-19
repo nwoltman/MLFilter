@@ -2,12 +2,12 @@
 
 #include "frame_processor.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 
 #include <streams.h>
 
-#include "formats.h"
 #include "engine/inference_session.h"
 
 namespace MLFilter {
@@ -100,9 +100,6 @@ auto FrameProcessor::Create(const std::filesystem::path &enginePath,
 
     processor->_outW = processor->_session->OutputWidth();
     processor->_outH = processor->_session->OutputHeight();
-    processor->_rowBytes = Rgb48Stride(processor->_outW);
-    processor->_tightOutputBytes =
-        static_cast<size_t>(processor->_rowBytes) * processor->_outH;
     processor->_hostTransportLine = TransportFallbackLine(format);
     processor->_nativeTransportLine = TransportNativeLine(format);
     processor->_debugOverlay.SetStreamInfo(
@@ -117,7 +114,8 @@ auto FrameProcessor::Create(const std::filesystem::path &enginePath,
 
 FrameProcessor::~FrameProcessor() = default;
 
-auto FrameProcessor::Process(IMediaSample *in, IMediaSample *out, bool showDebugOverlay,
+auto FrameProcessor::Process(IMediaSample *in, IMediaSample *out,
+                             PackedOutputFormat outputFormat, int outputStride, bool showDebugOverlay,
                              double previousFrameMs, uint64_t droppedFrames,
                              double &overlayOverheadMs,
                              const D3D11DecoderState *d3d11State) -> HRESULT {
@@ -210,18 +208,15 @@ auto FrameProcessor::Process(IMediaSample *in, IMediaSample *out, bool showDebug
     // to a 4096-byte boundary) while the media type still advertises the unpadded width*6
     // stride. The renderer reads at its allocator pitch, so derive the real row stride from the
     // actual buffer (GetSize / height) and write rows at that pitch; fall back to width*6.
-    int stride = _rowBytes;
     const long bufSize = out->GetSize();
-    if (_outH > 0 && bufSize / _outH >= _rowBytes) {
-        stride = static_cast<int>(bufSize / _outH);
+    if (bufSize <= 0) {
+        return E_FAIL;
     }
 
-    // The engine output is converted to packed, top-down RGB48 on the GPU; this copies it into the
-    // output sample, expanding each row to the allocator's row pitch.
-    const size_t bufferBytes = bufSize > 0
-        ? static_cast<size_t>(bufSize)
-        : _tightOutputBytes;
-    if (!_session->Download(dstBuffer, static_cast<size_t>(stride), bufferBytes)) {
+    const int rowBytes = _outW * PackedOutputBytesPerPixel(outputFormat);
+    // Keep the existing allocator-derived RGB48 pitch. Y410 uses the media type's pitch.
+    const int stride = outputStride != 0 ? outputStride : std::max<int>(rowBytes, bufSize / _outH);
+    if (!_session->Download(dstBuffer, stride, bufSize, outputFormat, _conversion.bt709)) {
         return E_FAIL;
     }
 
@@ -229,7 +224,7 @@ auto FrameProcessor::Process(IMediaSample *in, IMediaSample *out, bool showDebug
         const auto overlayBegin = std::chrono::steady_clock::now();
 
         const auto cache = _session->GetOutputCacheStatus();
-        _debugOverlay.Draw(dstBuffer, static_cast<size_t>(stride), _outW, _outH,
+        _debugOverlay.Draw(dstBuffer, static_cast<size_t>(stride), _outW, _outH, outputFormat,
                            {previousFrameMs, droppedFrames, cache.cached, cache.capacity,
                             cache.transientTransfers});
 
@@ -238,8 +233,7 @@ auto FrameProcessor::Process(IMediaSample *in, IMediaSample *out, bool showDebug
             std::chrono::duration<double, std::milli>(overlayEnd - overlayBegin).count();
     }
 
-    out->SetActualDataLength(stride * _outH);
-    return S_OK;
+    return out->SetActualDataLength(stride * _outH);
 }
 
 auto FrameProcessor::UnregisterInputBuffers() -> void {

@@ -3,6 +3,7 @@
 #include "filter.h"
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -165,35 +166,90 @@ auto KindForSubtype(const GUID &s, Yuv420Format &kind) -> bool {
     return true;
 }
 
-// Resolves the conversion's matrix and range from the input media type's color info. Range defaults
-// to limited; an unspecified matrix defaults by height (BT.601 below 720p, otherwise BT.709).
-auto ResolveColorInfo(const CMediaType &mt, int height, bool &bt709, bool &fullRange) -> void {
-    fullRange = false;
-    bool matrixKnown = false;
+constexpr DWORD kColorInfoFlags = AMCONTROL_USED | AMCONTROL_COLORINFO_PRESENT;
 
-    if (mt.formattype == FORMAT_VideoInfo2 && mt.cbFormat >= sizeof(VIDEOINFOHEADER2)) {
-        const auto *vih2 = reinterpret_cast<const VIDEOINFOHEADER2 *>(mt.pbFormat);
-        if ((vih2->dwControlFlags & AMCONTROL_USED) && (vih2->dwControlFlags & AMCONTROL_COLORINFO_PRESENT)) {
-            const auto ext = reinterpret_cast<const DXVA_ExtendedFormat *>(&vih2->dwControlFlags);
-            if (ext->NominalRange == DXVA_NominalRange_0_255) {
-                fullRange = true;
-            } else if (ext->NominalRange == DXVA_NominalRange_16_235) {
-                fullRange = false;
-            }
-            if (ext->VideoTransferMatrix == DXVA_VideoTransferMatrix_BT709) {
-                bt709 = true;
-                matrixKnown = true;
-            } else if (ext->VideoTransferMatrix == DXVA_VideoTransferMatrix_BT601 ||
-                       ext->VideoTransferMatrix == DXVA_VideoTransferMatrix_SMPTE240M) {
-                bt709 = false;
-                matrixKnown = true;
-            }
+auto ResolveInputColor(const CMediaType &type, int height) -> DXVA_ExtendedFormat {
+    DXVA_ExtendedFormat color {};
+    if (type.formattype == FORMAT_VideoInfo2 && type.cbFormat >= sizeof(VIDEOINFOHEADER2)) {
+        const auto *video = reinterpret_cast<const VIDEOINFOHEADER2 *>(type.pbFormat);
+        if ((video->dwControlFlags & kColorInfoFlags) == kColorInfoFlags) {
+            color = std::bit_cast<DXVA_ExtendedFormat>(video->dwControlFlags);
         }
     }
 
-    if (!matrixKnown) {
-        bt709 = height >= 720;
+    // Resolve the matrix supported by preprocessing, using source height for the default.
+    const bool hd = height >= 720;
+    switch (color.VideoTransferMatrix) {
+    case DXVA_VideoTransferMatrix_BT709:
+        break;
+    case DXVA_VideoTransferMatrix_BT601:
+    case DXVA_VideoTransferMatrix_SMPTE240M:
+        color.VideoTransferMatrix = DXVA_VideoTransferMatrix_BT601;
+        break;
+    default:
+        color.VideoTransferMatrix = hd ? DXVA_VideoTransferMatrix_BT709 : DXVA_VideoTransferMatrix_BT601;
+        break;
     }
+
+    if (color.VideoPrimaries == DXVA_VideoPrimaries_Unknown) {
+        color.VideoPrimaries = hd ? DXVA_VideoPrimaries_BT709 : DXVA_VideoPrimaries_SMPTE170M;
+    }
+    if (color.VideoTransferFunction == DXVA_VideoTransFunc_Unknown) {
+        color.VideoTransferFunction = DXVA_VideoTransFunc_22_709;
+    }
+
+    return color;
+}
+
+auto OutputColorInfo(const CMediaType &inputType, bool y410) -> DXVA_ExtendedFormat {
+    int width = 0;
+    int height = 0;
+    GetVideoResolution(inputType, width, height);
+
+    const auto input = ResolveInputColor(inputType, height);
+    DXVA_ExtendedFormat output {};
+    output.SampleFormat = kColorInfoFlags;
+    output.NominalRange = y410 ? DXVA_NominalRange_16_235 : DXVA_NominalRange_0_255;
+    output.VideoTransferMatrix = y410 ? input.VideoTransferMatrix : DXVA_VideoTransferMatrix_Unknown;
+    output.VideoPrimaries = input.VideoPrimaries;
+    output.VideoTransferFunction = input.VideoTransferFunction;
+    return output;
+}
+
+auto GetY410Stride(const AM_MEDIA_TYPE &type, int width, int height,
+                   const DXVA_ExtendedFormat &expectedColor) -> int {
+    if (type.majortype != MEDIATYPE_Video || type.subtype != Y410Subtype() ||
+        type.formattype != FORMAT_VideoInfo2 || type.cbFormat < sizeof(VIDEOINFOHEADER2) ||
+        type.pbFormat == nullptr) {
+        return 0;
+    }
+
+    const auto &video = *reinterpret_cast<const VIDEOINFOHEADER2 *>(type.pbFormat);
+    const auto &bitmap = video.bmiHeader;
+    constexpr int bytesPerPixel = PackedOutputBytesPerPixel(PackedOutputFormat::Y410);
+    if (bitmap.biCompression != kY410Fourcc || bitmap.biBitCount != 32 ||
+        bitmap.biHeight != height || bitmap.biWidth < width ||
+        static_cast<uint64_t>(bitmap.biWidth) * height * bytesPerPixel > MAXLONG) {
+        return 0;
+    }
+
+    // A renderer may use biWidth for the surface stride and rcTarget for the visible region.
+    const RECT active {0, 0, width, height};
+    if ((bitmap.biWidth != width || !IsRectEmpty(&video.rcTarget)) &&
+        !EqualRect(&video.rcTarget, &active)) {
+        return 0;
+    }
+
+    const auto color = std::bit_cast<DXVA_ExtendedFormat>(video.dwControlFlags);
+    if ((video.dwControlFlags & kColorInfoFlags) != kColorInfoFlags ||
+        color.NominalRange != expectedColor.NominalRange ||
+        color.VideoTransferMatrix != expectedColor.VideoTransferMatrix ||
+        color.VideoPrimaries != expectedColor.VideoPrimaries ||
+        color.VideoTransferFunction != expectedColor.VideoTransferFunction) {
+        return 0;
+    }
+
+    return bitmap.biWidth * bytesPerPixel;
 }
 
 }
@@ -247,42 +303,38 @@ auto CMLFilter::CheckTransform(const CMediaType *mtIn, const CMediaType *mtOut) 
     CheckPointer(mtIn, E_POINTER);
     CheckPointer(mtOut, E_POINTER);
 
-    if (*mtIn->Type() != MEDIATYPE_Video) {
+    if (*mtIn->Type() != MEDIATYPE_Video || *mtOut->Type() != MEDIATYPE_Video) {
         return VFW_E_TYPE_NOT_ACCEPTED;
     }
 
-    if (!_inputFormatSupported) {
-        // Negotiate a renderer-friendly placeholder output so downstream rejection does not make
-        // the graph builder ask the decoder for a different input subtype. Streaming will fail
-        // before MLFilter produces a frame.
-        if (*mtOut->Subtype() != OutputSubtype()) {
-            return VFW_E_TYPE_NOT_ACCEPTED;
-        }
-        int inW = 0;
-        int inH = 0;
-        int outW = 0;
-        int outH = 0;
-        return GetVideoResolution(*mtIn, inW, inH) &&
-                       GetVideoResolution(*mtOut, outW, outH) &&
-                       inW == outW && inH == outH
-                   ? S_OK
-                   : VFW_E_TYPE_NOT_ACCEPTED;
-    }
-
-    if (_processor == nullptr) {
+    const GUID &subtype = *mtOut->Subtype();
+    if (m_pOutput != nullptr && m_pOutput->IsConnected() &&
+        subtype != *m_pOutput->CurrentMediaType().Subtype()) {
         return VFW_E_TYPE_NOT_ACCEPTED;
     }
 
-    // Inference: output must be RGB48 at the engine's output resolution.
-    if (*mtOut->Subtype() != OutputSubtype()) {
+    int width = 0;
+    int height = 0;
+    if (_processor != nullptr) {
+        width = _processor->OutputWidth();
+        height = _processor->OutputHeight();
+    } else if (_inputFormatSupported || !GetVideoResolution(*mtIn, width, height)) {
+        // Unsupported input formats use a placeholder at the input resolution until streaming.
         return VFW_E_TYPE_NOT_ACCEPTED;
     }
+
+    if (subtype == Y410Subtype()) {
+        return GetY410Stride(*mtOut, width, height, OutputColorInfo(*mtIn, true)) > 0
+            ? S_OK : VFW_E_TYPE_NOT_ACCEPTED;
+    }
+    if (subtype != Rgb48Subtype()) {
+        return VFW_E_TYPE_NOT_ACCEPTED;
+    }
+
     int outW = 0;
     int outH = 0;
-    if (!GetVideoResolution(*mtOut, outW, outH) || outW != _processor->OutputWidth() || outH != _processor->OutputHeight()) {
-        return VFW_E_TYPE_NOT_ACCEPTED;
-    }
-    return S_OK;
+    return GetVideoResolution(*mtOut, outW, outH) && outW == width && outH == height
+        ? S_OK : VFW_E_TYPE_NOT_ACCEPTED;
 }
 
 auto CMLFilter::GetMediaType(int iPosition, CMediaType *pMediaType) -> HRESULT {
@@ -294,10 +346,13 @@ auto CMLFilter::GetMediaType(int iPosition, CMediaType *pMediaType) -> HRESULT {
     if (iPosition < 0) {
         return E_INVALIDARG;
     }
-    if (iPosition > 0) {
+    if (iPosition > 1) {
         return VFW_S_NO_MORE_ITEMS;
     }
 
+    const bool y410 = iPosition == 1;
+    const auto format = y410 ? PackedOutputFormat::Y410 : PackedOutputFormat::Rgb48;
+    const int bytesPerPixel = PackedOutputBytesPerPixel(format);
     const CMediaType &inMt = m_pInput->CurrentMediaType();
 
     if (_processor == nullptr && _inputFormatSupported) {
@@ -312,26 +367,28 @@ auto CMLFilter::GetMediaType(int iPosition, CMediaType *pMediaType) -> HRESULT {
     } else if (!GetVideoResolution(inMt, outW, outH)) {
         return VFW_E_TYPE_NOT_ACCEPTED;
     }
-    const DWORD imageSize = static_cast<DWORD>(Rgb48Stride(outW)) * outH;
+    const uint64_t packedBytes = static_cast<uint64_t>(outW) * outH * bytesPerPixel;
+    if (packedBytes > MAXLONG) {
+        return VFW_E_TYPE_NOT_ACCEPTED;
+    }
+    const auto imageSize = static_cast<DWORD>(packedBytes);
 
-    // Inherit timing / aspect ratio / color metadata from the input where available.
+    // Inherit timing and aspect ratio from the input where available.
     REFERENCE_TIME avgTimePerFrame = 0;
     DWORD aspectX = 0;
     DWORD aspectY = 0;
-    DWORD inControlFlags = 0;
     if (inMt.formattype == FORMAT_VideoInfo2 && inMt.cbFormat >= sizeof(VIDEOINFOHEADER2)) {
         const auto *in = reinterpret_cast<const VIDEOINFOHEADER2 *>(inMt.pbFormat);
         avgTimePerFrame = in->AvgTimePerFrame;
         aspectX = in->dwPictAspectRatioX;
         aspectY = in->dwPictAspectRatioY;
-        inControlFlags = in->dwControlFlags;
     } else if (inMt.formattype == FORMAT_VideoInfo && inMt.cbFormat >= sizeof(VIDEOINFOHEADER)) {
         avgTimePerFrame = reinterpret_cast<const VIDEOINFOHEADER *>(inMt.pbFormat)->AvgTimePerFrame;
     }
 
     pMediaType->InitMediaType();
     pMediaType->SetType(&MEDIATYPE_Video);
-    pMediaType->SetSubtype(&OutputSubtype());
+    pMediaType->SetSubtype(y410 ? &Y410Subtype() : &Rgb48Subtype());
     pMediaType->SetFormatType(&FORMAT_VideoInfo2);
     pMediaType->SetTemporalCompression(FALSE);
     pMediaType->SetSampleSize(imageSize);
@@ -345,35 +402,7 @@ auto CMLFilter::GetMediaType(int iPosition, CMediaType *pMediaType) -> HRESULT {
     out->dwPictAspectRatioX = aspectX != 0 ? aspectX : static_cast<DWORD>(outW);
     out->dwPictAspectRatioY = aspectY != 0 ? aspectY : static_cast<DWORD>(outH);
 
-    // Tag the output as full-range RGB and carry the source's primaries/transfer. We don't
-    // convert gamut/gamma, so the output sits in whatever primaries/transfer the source had.
-    // If the input doesn't state them, fall back to a guess by the *source* resolution
-    // (consistent with our matrix guess: HD -> BT.709, SD -> SMPTE-170M). We set them
-    // explicitly rather than leaving them unknown so madVR can't re-guess from the (possibly
-    // upscaled) output resolution and pick a different gamut/gamma than we assumed.
-    int inW = 0;
-    int inH = 0;
-    GetVideoResolution(inMt, inW, inH);
-    const bool hd = inH >= 720;
-    unsigned primaries = hd ? DXVA_VideoPrimaries_BT709 : DXVA_VideoPrimaries_SMPTE170M;
-    unsigned transfer = DXVA_VideoTransFunc_22_709; // SD and HD share the BT.709 transfer curve
-    if ((inControlFlags & AMCONTROL_USED) && (inControlFlags & AMCONTROL_COLORINFO_PRESENT)) {
-        const auto inExt = reinterpret_cast<const DXVA_ExtendedFormat *>(&inControlFlags);
-        if (inExt->VideoPrimaries != DXVA_VideoPrimaries_Unknown) {
-            primaries = inExt->VideoPrimaries;
-        }
-        if (inExt->VideoTransferFunction != DXVA_VideoTransFunc_Unknown) {
-            transfer = inExt->VideoTransferFunction;
-        }
-    }
-
-    DXVA_ExtendedFormat outExt = {};
-    outExt.SampleFormat = AMCONTROL_USED | AMCONTROL_COLORINFO_PRESENT;
-    outExt.NominalRange = DXVA_NominalRange_0_255;
-    outExt.VideoTransferMatrix = DXVA_VideoTransferMatrix_Unknown; // RGB, no YUV matrix
-    outExt.VideoPrimaries = static_cast<DXVA_VideoPrimaries>(primaries);
-    outExt.VideoTransferFunction = static_cast<DXVA_VideoTransferFunction>(transfer);
-    out->dwControlFlags = *reinterpret_cast<const DWORD *>(&outExt);
+    out->dwControlFlags = std::bit_cast<DWORD>(OutputColorInfo(inMt, y410));
 
     // Active region = the whole frame. madVR can misread an empty rcSource/rcTarget.
     out->rcSource.left = 0;
@@ -384,12 +413,11 @@ auto CMLFilter::GetMediaType(int iPosition, CMediaType *pMediaType) -> HRESULT {
 
     out->bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
     out->bmiHeader.biWidth = outW;
-    // RGB48 ('RGB0') convention used by LAV/madVR: biHeight is POSITIVE but the rows are still
-    // stored top-down (no flip) — unlike standard BI_RGB DIBs. FrameProcessor packs top-down.
+    // Both FOURCC formats use a positive biHeight with top-down rows.
     out->bmiHeader.biHeight = outH;
     out->bmiHeader.biPlanes = 1;
-    out->bmiHeader.biBitCount = 48;
-    out->bmiHeader.biCompression = Fourcc('R', 'G', 'B', '0');
+    out->bmiHeader.biBitCount = static_cast<WORD>(8 * bytesPerPixel);
+    out->bmiHeader.biCompression = y410 ? kY410Fourcc : kRgb48Fourcc;
     out->bmiHeader.biSizeImage = imageSize;
 
     return S_OK;
@@ -407,7 +435,9 @@ auto CMLFilter::DecideBufferSize(IMemAllocator *pAlloc, ALLOCATOR_PROPERTIES *pP
     // report IsConnected()).
     long requiredSize = m_pOutput->CurrentMediaType().GetSampleSize();
     if (_processor != nullptr) {
-        requiredSize = Rgb48Stride(_processor->OutputWidth()) * _processor->OutputHeight();
+        const int stride = _y410Stride != 0 ? _y410Stride :
+            _processor->OutputWidth() * PackedOutputBytesPerPixel(PackedOutputFormat::Rgb48);
+        requiredSize = stride * _processor->OutputHeight();
     }
 
     if (pProps->cBuffers < 1) {
@@ -497,14 +527,37 @@ auto CMLFilter::Transform(IMediaSample *pIn, IMediaSample *pOut) -> HRESULT {
         return VFW_E_TYPE_NOT_ACCEPTED;
     }
 
+    // DirectShow renderers can attach a new surface pitch to an allocator sample.
+    if (_y410Stride != 0) {
+        AM_MEDIA_TYPE *sampleType = nullptr;
+        const HRESULT typeHr = pOut->GetMediaType(&sampleType);
+        if (FAILED(typeHr)) {
+            return typeHr;
+        }
+        if (typeHr == S_OK) {
+            if (sampleType == nullptr) {
+                return VFW_E_INVALIDMEDIATYPE;
+            }
+
+            const int stride = GetY410Stride(*sampleType, _processor->OutputWidth(),
+                _processor->OutputHeight(), OutputColorInfo(m_pInput->CurrentMediaType(), true));
+            DeleteMediaType(sampleType);
+            if (stride == 0) {
+                return VFW_E_TYPE_NOT_ACCEPTED;
+            }
+            _y410Stride = stride;
+        }
+    }
+
     D3D11DecoderState d3d11State;
     if (InputPin() != nullptr) {
         d3d11State = InputPin()->D3D11State();
     }
 
     double overlayOverheadMs = 0;
+    const auto format = _y410Stride != 0 ? PackedOutputFormat::Y410 : PackedOutputFormat::Rgb48;
     const HRESULT result = _processor->Process(
-        pIn, pOut, _debugOverlayEnabled.load(std::memory_order_relaxed), _previousFrameMs,
+        pIn, pOut, format, _y410Stride, _debugOverlayEnabled.load(std::memory_order_relaxed), _previousFrameMs,
         _droppedFrames, overlayOverheadMs, &d3d11State);
 
     if (d3d11State.context != nullptr) {
@@ -613,6 +666,13 @@ auto CMLFilter::CompleteConnect(PIN_DIRECTION direction, IPin *pReceivePin) -> H
             ScheduleSelfRemoval();
         }
     } else if (direction == PINDIR_OUTPUT) {
+        const CMediaType &outputType = m_pOutput->CurrentMediaType();
+        if (*outputType.Subtype() == Y410Subtype()) {
+            // The format and stride were validated by CheckTransform before connecting.
+            const auto &video = *reinterpret_cast<const VIDEOINFOHEADER2 *>(outputType.Format());
+            _y410Stride = video.bmiHeader.biWidth * PackedOutputBytesPerPixel(PackedOutputFormat::Y410);
+        }
+
         // Register only after this instance is part of a complete playback graph. MPC-BE may
         // instantiate probe copies while enumerating filters; registering in the constructor
         // lets a probe copy claim the process-wide hotkey instead of the streaming instance.
@@ -624,6 +684,7 @@ auto CMLFilter::CompleteConnect(PIN_DIRECTION direction, IPin *pReceivePin) -> H
 
 auto CMLFilter::BreakConnect(PIN_DIRECTION direction) -> HRESULT {
     if (direction == PINDIR_OUTPUT) {
+        _y410Stride = 0;
         _hotkeyListener.Stop();
         _debugOverlayEnabled.store(false, std::memory_order_relaxed);
     }
@@ -694,9 +755,9 @@ auto CMLFilter::SetupProcessorForInput() -> HRESULT {
     if (!KindForSubtype(*mt.Subtype(), kind)) {
         return S_FALSE;
     }
-    bool bt709 = false;
-    bool fullRange = false;
-    ResolveColorInfo(mt, config.height, bt709, fullRange);
+    const auto color = ResolveInputColor(mt, config.height);
+    const bool bt709 = color.VideoTransferMatrix == DXVA_VideoTransferMatrix_BT709;
+    const bool fullRange = color.NominalRange == DXVA_NominalRange_0_255;
 
     std::wstring error;
     _processor = FrameProcessor::Create(builder.EnginePath(request), kind, bt709, fullRange, error);

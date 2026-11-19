@@ -9,6 +9,7 @@
 
 #include <windows.h>
 
+#include "color/packed_output.h"
 #include "color/yuv420_format.h"
 #include "d3d11_native_interfaces.h"
 #include "debug_overlay.h"
@@ -19,8 +20,8 @@ namespace MLFilter {
 
 class InferenceSession;
 
-// One per pin connection. Uploads compact YUV and performs conversion, inference, and RGB48
-// packing on the GPU before copying the result into the output sample.
+// One per pin connection. Uploads compact YUV and performs conversion, inference, and output
+// packing on the GPU.
 class FrameProcessor {
 public:
     // Builds the session (deserializing the engine) and the converter for the given input
@@ -40,9 +41,9 @@ public:
     auto OutputWidth() const -> int { return _outW; }
     auto OutputHeight() const -> int { return _outH; }
 
-    // Converts + infers + packs one frame's pixels into out (RGB48, top-down). Does not touch
-    // timestamps/flags — the caller copies those. Returns an HRESULT.
-    auto Process(IMediaSample *in, IMediaSample *out, bool showDebugOverlay,
+    // Converts, infers, and packs one top-down frame. A zero stride uses the sample's RGB48 pitch.
+    auto Process(IMediaSample *in, IMediaSample *out, PackedOutputFormat outputFormat, int outputStride,
+                 bool showDebugOverlay,
                  double previousFrameMs, uint64_t droppedFrames, double &overlayOverheadMs,
                  const D3D11DecoderState *d3d11State = nullptr) -> HRESULT;
 
@@ -66,8 +67,6 @@ private:
 
     int _outW = 0;
     int _outH = 0;
-    int _rowBytes = 0;
-    size_t _tightOutputBytes = 0;
 };
 
 }

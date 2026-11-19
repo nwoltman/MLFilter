@@ -50,13 +50,18 @@ auto FindGlyph(char c) -> const Glyph * {
     return &GLYPHS[0]; // unreachable
 }
 
-auto PutPixel(uint8_t *frame, size_t stride, int x, int y) -> void {
-    auto *p = reinterpret_cast<uint16_t *>(frame + static_cast<size_t>(y) * stride) + x * 3;
+auto PutWhitePixel(uint8_t *row, int x, PackedOutputFormat format) -> void {
+    if (format == PackedOutputFormat::Y410) {
+        std::memcpy(row + static_cast<size_t>(x) * sizeof(kY410White), &kY410White, sizeof(kY410White));
+        return;
+    }
+
+    auto *p = reinterpret_cast<uint16_t *>(row) + x * 3;
     p[0] = p[1] = p[2] = 0xffff;
 }
 
 auto DrawText(uint8_t *frame, size_t stride, int width, int height,
-              int x, int y, std::string_view text) -> void {
+              int x, int y, std::string_view text, PackedOutputFormat format) -> void {
     for (char c : text) {
         const Glyph *glyph = FindGlyph(c);
         for (int row = 0; row < 7; ++row) for (int col = 0; col < 5; ++col) {
@@ -64,7 +69,9 @@ auto DrawText(uint8_t *frame, size_t stride, int width, int height,
             for (int sy = 0; sy < TEXT_SCALE; ++sy) for (int sx = 0; sx < TEXT_SCALE; ++sx) {
                 const int px = x + col * TEXT_SCALE + sx;
                 const int py = y + row * TEXT_SCALE + sy;
-                if (px < width && py < height) PutPixel(frame, stride, px, py);
+                if (px < width && py < height) {
+                    PutWhitePixel(frame + static_cast<size_t>(py) * stride, px, format);
+                }
             }
         }
         x += GLYPH_ADVANCE;
@@ -131,7 +138,7 @@ auto DebugOverlay::SetTransportInfo(std::string transportLine) -> void {
     _transportLine = std::move(transportLine);
 }
 
-auto DebugOverlay::Draw(uint8_t *frame, size_t stride, int width, int height,
+auto DebugOverlay::Draw(uint8_t *frame, size_t stride, int width, int height, PackedOutputFormat format,
                         const DebugOverlayTimings &t) -> void {
     _averageSum += t.pipelineMs;
 
@@ -170,37 +177,47 @@ auto DebugOverlay::Draw(uint8_t *frame, size_t stride, int width, int height,
     const int panelHeight = std::min(height, 308 + extraEngineRows * 30);
 
     for (int y = 0; y < panelHeight; ++y) {
-        std::memset(frame + static_cast<size_t>(y) * stride, 0,
-                    static_cast<size_t>(panelWidth) * 3 * sizeof(uint16_t));
+        auto *row = frame + static_cast<size_t>(y) * stride;
+        if (format == PackedOutputFormat::Y410) {
+            for (int x = 0; x < panelWidth; ++x) {
+                std::memcpy(row + static_cast<size_t>(x) * sizeof(kY410Black), &kY410Black, sizeof(kY410Black));
+            }
+        } else {
+            std::memset(row, 0, static_cast<size_t>(panelWidth) * PackedOutputBytesPerPixel(format));
+        }
     }
 
+    const auto drawText = [&](int y, std::string_view text) {
+        DrawText(frame, stride, width, height, TEXT_LEFT, y, text, format);
+    };
     char line[128] {};
-    DrawText(frame, stride, width, height, TEXT_LEFT, 8, "MLFILTER DEBUG");
+    drawText(8, "MLFILTER DEBUG");
     // One blank text row separates the heading from the stream information.
     for (size_t index = 0; index < _engineLines.size(); ++index) {
-        DrawText(frame, stride, width, height, TEXT_LEFT,
-                 68 + static_cast<int>(index) * 30, _engineLines[index]);
+        drawText(68 + static_cast<int>(index) * 30, _engineLines[index]);
     }
 
     const int streamOffset = extraEngineRows * 30;
-    DrawText(frame, stride, width, height, TEXT_LEFT, 98 + streamOffset, _inputLine);
-    DrawText(frame, stride, width, height, TEXT_LEFT, 128 + streamOffset, _outputLine);
-    DrawText(frame, stride, width, height, TEXT_LEFT, 158 + streamOffset, _transportLine);
+    drawText(98 + streamOffset, _inputLine);
+    std::snprintf(line, sizeof(line), "%s %s", _outputLine.c_str(),
+                  format == PackedOutputFormat::Y410 ? "Y410" : "RGB48");
+    drawText(128 + streamOffset, line);
+    drawText(158 + streamOffset, _transportLine);
 
     std::snprintf(line, sizeof(line),
                   "MAPPED CACHE: %zu/%zu  TRANSIENT REGISTRATIONS %llu",
                   t.outputCacheSize, t.outputCacheCapacity,
                   static_cast<unsigned long long>(t.outputTransientTransfers));
-    DrawText(frame, stride, width, height, TEXT_LEFT, 188 + streamOffset, line);
+    drawText(188 + streamOffset, line);
 
     std::snprintf(line, sizeof(line), "DROPPED FRAMES: %llu",
                   static_cast<unsigned long long>(t.droppedFrames));
-    DrawText(frame, stride, width, height, TEXT_LEFT, 218 + streamOffset, line);
+    drawText(218 + streamOffset, line);
 
     // A blank row separates the dropped-frame counter from the live timing metric.
     std::snprintf(line, sizeof(line), "%-11s %7.3F MS (MAX %.3F)",
                   "FRAME TIME", _displayedAverage, _displayedMaximum);
-    DrawText(frame, stride, width, height, TEXT_LEFT, 278 + streamOffset, line);
+    drawText(278 + streamOffset, line);
 }
 
 }
